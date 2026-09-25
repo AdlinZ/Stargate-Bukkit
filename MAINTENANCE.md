@@ -188,12 +188,42 @@ For #364, BungeeBark's upstream instructions require disabling Velocity's native
 handler queues messages for empty servers; the plugin cannot infer that BungeeBark is
 installed merely from a GetServer response. Validate the actual proxy configuration,
 empty target-server queue and return trip before declaring the original report fixed.
-No proxy plugin was modified and no real server compatibility claim is made here.
+No proxy plugin was modified; the real-server checks below cover only the listed local scenarios.
 
 Sources: [Paper messaging format](https://docs.papermc.io/paper/dev/plugin-messaging/),
 [Paper 1.21.1 Boat API](https://jd.papermc.io/paper/1.21.1/org/bukkit/entity/Boat.html),
 [BungeeBark Forward](https://github.com/RoinujNosde/BungeeBark/blob/main/src/main/java/me/roinujnosde/bungeebark/methods/Forward.java),
 [upstream #364 configuration discussion](https://github.com/stargate-rewritten/Stargate-Bukkit/issues/364).
+
+## Folia 26.1.2 integration check (2026-09-26)
+
+A supplied server archive was tested in localhost-only copies with Folia
+26.1.2 build 8 (`62dc0f2`), Temurin 25.0.4.1, its existing SQLite database,
+three same-world portals, and ViaVersion 5.11.0. No uploaded world, account,
+configuration or database files are included in this repository.
+
+A temporary plugin called the actual portal API from owning region threads using
+armor stands. Plugin chunk tickets kept the three areas ticking without players.
+The original 1.0.0.18-ALPHA reproduced `Async chunk retrieval` on four of six
+directed routes. The maintenance build completed all six routes. A cow passenger
+also arrived and reattached to its carrier.
+
+The first live leash check exposed a second ordering bug: the holder leaves its
+source region before the companion's next scheduled tick, so Folia breaks the
+leash and the old validation abandons the companion. Detach the accepted leash
+on its owning source region before starting the holder's teleport. Keep the
+companion teleport on its entity scheduler and restore the relationship only
+after both results settle; preserve any newly attached leash while waiting.
+The regression fails without this change. The live cow leash check now passes,
+along with the six routes and passenger check. Full Maven verification: **725
+tests, 723 passed, 2 existing skips**, including disposable MySQL and SQLite.
+
+These are real-server API tests using non-player entities, not a human client
+walk-through. Destination regions were loaded for deterministic checks. Cold
+chunks, player interaction, cross-world safe-spawn, boat/furnace behavior, and
+Velocity/BungeeBark end-to-end behavior still require separate validation.
+Startup and ordinary shutdown passed; shutdown under active writes is not covered
+by this server probe.
 
 ## Build and test
 

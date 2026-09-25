@@ -292,8 +292,20 @@ public class Teleporter {
         }
         for (Entity entity : nearbyLeashed) {
             if (leashHolders.get(entity) != holder) continue;
+            // Detach on the owning source region before the holder leaves it. Waiting
+            // for the companion's next tick lets Folia break the leash first, losing
+            // the relationship this teleport already accepted.
+            if (!owns(entity) || LeashSupport.holder(entity) != holder) {
+                cancelPendingBranch(entity, new HashSet<>());
+                continue;
+            }
+            attachWhenSettled(entity, holder, entity, () -> {
+                if (LeashSupport.holder(entity) == null) LeashSupport.setHolder(entity, holder);
+            });
+            LeashSupport.setHolder(entity, null);
             scheduleTeleport(entity, () -> {
-                if (LeashSupport.holder(entity) != holder) {
+                // Respect a new leash attached while the companion was waiting.
+                if (LeashSupport.holder(entity) != null) {
                     cancelPendingBranch(entity, new HashSet<>());
                     return;
                 }
@@ -304,8 +316,6 @@ public class Teleporter {
                     entity.sendMessage(languageManager.getErrorMessage(TranslatableMessage.DESTINATION_BLOCKED));
                     return;
                 }
-                attachWhenSettled(entity, holder, entity, () -> LeashSupport.setHolder(entity, holder));
-                LeashSupport.setHolder(entity, null);
                 betterTeleport(entity, modifiedExit, rotation);
             });
         }

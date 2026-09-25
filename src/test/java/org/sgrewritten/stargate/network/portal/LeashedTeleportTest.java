@@ -44,6 +44,7 @@ class LeashedTeleportTest {
     private final ControlledTeleport boatTrip = new ControlledTeleport();
     private HorseMock holder;
     private LeashableBoat boat;
+    private Runnable onHolderDeparture = () -> { };
 
     /** Simulates the public non-living leash API available on Paper 1.21+. */
     public static class LeashableBoat extends BoatMock {
@@ -80,7 +81,11 @@ class LeashedTeleportTest {
                 passengers.forEach(Entity::leaveVehicle);
                 return !passengers.isEmpty();
             }
-            @Override public CompletableFuture<Boolean> teleportAsync(Location location) { return holderTrip.start(location); }
+            @Override public CompletableFuture<Boolean> teleportAsync(Location location) {
+                // Folia removes the holder from its source region before the companion's next tick.
+                onHolderDeparture.run();
+                return holderTrip.start(location);
+            }
             @Override public EntityScheduler getScheduler() { return holderTrip; }
         };
         holder.setLocation(new Location(world, 0, 10, 0));
@@ -121,6 +126,27 @@ class LeashedTeleportTest {
     void partialFailureDoesNotAttachAcrossDistantRegions() {
         start(); finish(holderTrip, true); finish(boatTrip, false);
         assertNull(boat.getLeashHolder());
+    }
+
+    @Test
+    void holderDepartureCannotLoseTheCompanionBeforeItsScheduledTeleport() {
+        onHolderDeparture = () -> boat.setLeashHolder(null);
+        start();
+        assertNotNull(boatTrip.destination);
+        finish(holderTrip, true);
+        finish(boatTrip, true);
+        assertSame(holder, boat.getLeashHolder());
+    }
+
+    @Test
+    void aNewLeashWhileWaitingIsPreservedEvenWhenTheHolderTeleportFails() {
+        HorseMock newHolder = new HorseMock(server, UUID.randomUUID());
+        newHolder.setLocation(holder.getLocation());
+        onHolderDeparture = () -> boat.setLeashHolder(newHolder);
+        start();
+        assertNull(boatTrip.destination);
+        finish(holderTrip, false);
+        assertSame(newHolder, boat.getLeashHolder());
     }
 
     @Test
