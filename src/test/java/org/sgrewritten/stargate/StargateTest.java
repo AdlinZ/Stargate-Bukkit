@@ -110,6 +110,38 @@ class StargateTest {
     }
 
     @Test
+    void reloadWaitsForAnAcceptedSlowDatabaseWrite() throws Exception {
+        StargateTestHelper.runAllTasks();
+        java.util.concurrent.CountDownLatch writing = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicBoolean saved = new java.util.concurrent.atomic.AtomicBoolean();
+        new StargateQueuedAsyncTask() {
+            @Override public void run() {
+                writing.countDown();
+                try {
+                    if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Write was never released");
+                    saved.set(true);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(e);
+                }
+            }
+        }.runNow();
+        Assertions.assertTrue(writing.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        var releaser = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        try {
+            releaser.schedule(release::countDown, 300, java.util.concurrent.TimeUnit.MILLISECONDS);
+            plugin.reload();
+            Assertions.assertTrue(saved.get(), "Reload returned before an accepted database write completed");
+        } finally {
+            release.countDown();
+            releaser.shutdownNow();
+        }
+        StargateTestHelper.runAllTasks();
+        Assertions.assertNotNull(plugin.getRegistry().getNetwork("network", StorageType.LOCAL).getPortal(PORTAL1));
+    }
+
+    @Test
     void ownerAndNetworkChangesSurvivePluginReload() throws Exception {
         StargateTestHelper.runAllTasks();
         UUID owner = UUID.randomUUID();

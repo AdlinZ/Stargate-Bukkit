@@ -166,13 +166,19 @@ real proxy/server combination have not been reproduced.
   failures leave the new gate unregistered and the builder refunds creation charges.
   The shared database remains the authority even with stale registries on two servers.
 
+Reload now waits for accepted database writes before replacing storage or clearing
+registries. The first push CI exposed a real race in which a newly created U gate
+could disappear from the reloaded registry while its queued INSERT finished later.
+A slow-write regression fails with the original reload order and passes with the
+barrier. Timeout/interruption leaves the current registry intact and logs the failure.
+
 **Latency tradeoff:** the current portal-building/setter API is synchronous. Shared
 creation and saved owner/network edits now wait for SQL confirmation; slow/unavailable
 MySQL can delay that caller's server/region tick. Normal local creation retains its
 queued write. An asynchronous creation API is a separate follow-up.
 
-Validation: JDK 21 full `mvn verify`, disposable MySQL 8.4 and SQLite, **722 tests:
-720 passed, 2 existing furnace-minecart skips**. Includes 39 explicitly added regression
+Validation: JDK 21 full `mvn verify`, disposable MySQL 8.4 and SQLite, **723 tests:
+721 passed, 2 existing furnace-minecart skips**. Includes 40 explicitly added regression
 cases, plus existing parameterized cases expanded by the new translation key. Disabling
 persistence, shared reservation and non-living leash support makes their regressions fail.
 Restoring the original broadcaster sends three packets for three players instead of one.
