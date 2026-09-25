@@ -20,6 +20,7 @@ import org.sgrewritten.stargate.network.portal.portaldata.GateData;
 import org.sgrewritten.stargate.network.portal.portaldata.PortalData;
 import org.sgrewritten.stargate.property.StargateConstant;
 import org.sgrewritten.stargate.util.LegacyDataHandler;
+import org.sgrewritten.stargate.util.NameHelper;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -162,6 +163,16 @@ public class PortalStorageHelper {
             }
         } else {
             flags.add(StargateFlag.CUSTOM_NETWORK);
+        }
+        if (flags.contains(StargateFlag.CUSTOM_NETWORK)
+                && NameHelper.getNormalizedName(networkName).equals(StargateConstant.DEFAULT_NETWORK_ID)) {
+            // ':' is the legacy field delimiter, so this target cannot collide
+            // with another valid legacy network name. Keep custom and default
+            // portals separate, even if their portal names are identical.
+            String migratedName = ":" + StargateConstant.DEFAULT_NETWORK_ID;
+            Stargate.log(Level.WARNING, "Migrating reserved custom network '" + networkName
+                    + "' as '" + migratedName + "' for portal '" + name + "'");
+            networkName = migratedName;
         }
         GateFormatAPI format = GateFormatRegistry.getFormat(gateFileName);
         if (format == null) {

@@ -6,6 +6,7 @@ import be.seeseemelk.mockbukkit.WorldMock;
 import be.seeseemelk.mockbukkit.entity.PlayerMock;
 import be.seeseemelk.mockbukkit.scheduler.BukkitSchedulerMock;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,10 +15,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.sgrewritten.stargate.api.config.ConfigurationOption;
-import org.sgrewritten.stargate.api.gate.ImplicitGateBuilder;
 import org.sgrewritten.stargate.api.gate.GateStructureType;
+import org.sgrewritten.stargate.api.gate.ImplicitGateBuilder;
 import org.sgrewritten.stargate.api.network.Network;
 import org.sgrewritten.stargate.api.network.PortalBuilder;
+import org.sgrewritten.stargate.api.network.portal.PortalPosition;
+import org.sgrewritten.stargate.api.network.portal.PositionType;
 import org.sgrewritten.stargate.api.network.portal.RealPortal;
 import org.sgrewritten.stargate.api.network.portal.flag.StargateFlag;
 import org.sgrewritten.stargate.config.ConfigurationHelper;
@@ -32,13 +35,15 @@ import org.sgrewritten.stargate.network.StorageType;
 import org.sgrewritten.stargate.network.portal.PortalBlockGenerator;
 import org.sgrewritten.stargate.thread.task.StargateGlobalTask;
 import org.sgrewritten.stargate.thread.task.StargateQueuedAsyncTask;
+import org.sgrewritten.stargate.util.ButtonHelper;
 import org.sgrewritten.stargate.util.StargateTestHelper;
+import org.sgrewritten.stargate.util.database.DatabaseHelper;
 
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
-import java.util.logging.Level;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -98,6 +103,61 @@ class StargateTest {
         plugin.reload();
         StargateTestHelper.runAllTasks();
         Assertions.assertEquals(portal.getGate().getFormat().getIrisMaterial(false), iris.getType());
+    }
+
+    @Test
+    void reloadRestoresAndPersistsMissingButton() throws Exception {
+        StargateTestHelper.runAllTasks();
+        // The fixture uses the same stored shape as an E gate after removing its
+        // add-on: a normal non-always-on portal with a sign and no button record.
+        Assertions.assertFalse(portal.hasFlag(StargateFlag.ALWAYS_ON));
+        Assertions.assertTrue(portal.getGate().getPortalPositions().stream()
+                .noneMatch(position -> position.getPositionType() == PositionType.BUTTON));
+        for (int reload = 0; reload < 2; reload++) {
+            plugin.reload();
+            StargateTestHelper.runAllTasks();
+            StargateQueuedAsyncTask.waitForEmptyQueue();
+            RealPortal loaded = (RealPortal) plugin.getRegistry().getNetwork("network", StorageType.LOCAL).getPortal(PORTAL1);
+            assertNotNull(loaded);
+            Assertions.assertEquals(1, loaded.getGate().getPortalPositions().stream()
+                    .filter(position -> position.getPositionType() == PositionType.BUTTON).count());
+            PortalPosition button = loaded.getGate().getPortalPositions().stream()
+                    .filter(position -> position.getPositionType() == PositionType.BUTTON).findFirst().orElseThrow();
+            Block buttonBlock = loaded.getGate().getLocation(button.getRelativePositionLocation()).getBlock();
+            Assertions.assertTrue(ButtonHelper.isButton(buttonBlock.getType()));
+            Assertions.assertSame(loaded, plugin.getRegistry().getPortalPosition(buttonBlock.getLocation()).getPortal());
+            String table = DatabaseHelper.getTableNameConfiguration(false).getPortalPositionTableName();
+            try (var connection = DatabaseHelper.loadDatabase(plugin).getConnection();
+                 var query = connection.prepareStatement("SELECT COUNT(*) FROM " + table + " WHERE portalName = ? AND networkName = ?")) {
+                query.setString(1, PORTAL1);
+                query.setString(2, "network");
+                try (var rows = query.executeQuery()) {
+                    Assertions.assertTrue(rows.next());
+                    Assertions.assertEquals(2, rows.getInt(1), "One sign and one button must be stored, without duplicates");
+                }
+            }
+        }
+    }
+
+    @Test
+    void unsafeControlRepairKeepsStoredPortalForLaterRecovery() throws Exception {
+        StargateTestHelper.runAllTasks();
+        var signVector = portal.getGate().getPortalPositions().getFirst().getRelativePositionLocation();
+        var buttonVector = portal.getGate().getFormat().getControlBlocks().stream()
+                .filter(vector -> !vector.equals(signVector)).findFirst().orElseThrow();
+        Block occupied = portal.getGate().getLocation(buttonVector).getBlock();
+        occupied.setType(Material.DIAMOND_BLOCK);
+        plugin.reload();
+        StargateTestHelper.runAllTasks();
+        Assertions.assertNull(plugin.getRegistry().getNetwork("network", StorageType.LOCAL).getPortal(PORTAL1));
+        Assertions.assertEquals(Material.DIAMOND_BLOCK, occupied.getType());
+        // Removing the obstruction is enough to recover the same stored portal.
+        occupied.setType(Material.AIR);
+        plugin.reload();
+        StargateTestHelper.runAllTasks();
+        StargateQueuedAsyncTask.waitForEmptyQueue();
+        assertNotNull(plugin.getRegistry().getNetwork("network", StorageType.LOCAL).getPortal(PORTAL1));
+        Assertions.assertTrue(ButtonHelper.isButton(occupied.getType()));
     }
 
     @Test
