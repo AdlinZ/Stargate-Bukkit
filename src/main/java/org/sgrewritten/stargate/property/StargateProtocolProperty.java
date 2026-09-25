@@ -50,6 +50,8 @@ public enum StargateProtocolProperty {
     /**
      * The new name of the portal
      */
+    REQUEST_ID,
+
     NEW_PORTAL_NAME
 
 }

@@ -75,6 +75,57 @@ class StargateTest {
         portal = new PortalBuilder(plugin, player, PORTAL1).setGateBuilder(new ImplicitGateBuilder(signBlock1.getLocation(), plugin.getRegistry())).setNetwork(network).build();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void legacyProxyArrivalFindsGateBeforeOrAfterPlayerJoin(boolean messageFirst) throws Exception {
+        plugin.setConfigurationOptionValue(ConfigurationOption.USING_BUNGEE, true);
+        createBungeePortal();
+        StargateTestHelper.runAllTasks();
+        Network network = plugin.getRegistry().getNetwork(ConfigurationHelper.getString(ConfigurationOption.LEGACY_BUNGEE_NETWORK), StorageType.LOCAL);
+        RealPortal target = (RealPortal) network.getPortal(PORTAL2);
+        // Provide an actual landing platform outside the elevated test gate.
+        Location landing = target.getExit();
+        for (int x = -10; x <= 10; x++) {
+            for (int z = -10; z <= 10; z++) {
+                landing.clone().add(x, -1, z).getBlock().setType(Material.STONE);
+            }
+        }
+        PlayerMock arriving = new PlayerMock(server, "incoming");
+        arriving.setLocation(new Location(world, 1000, 10, 1000));
+        java.io.ByteArrayOutputStream packet = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(packet);
+        out.writeUTF(org.sgrewritten.stargate.property.PluginChannel.LEGACY_BUNGEE.getChannel());
+        out.writeUTF("incoming#@#" + PORTAL2);
+        var listener = new org.sgrewritten.stargate.listener.StargateBungeePluginMessageListener(plugin.getBungeeManager());
+        if (!messageFirst) server.addPlayer(arriving);
+        listener.onPluginMessageReceived(org.sgrewritten.stargate.property.PluginChannel.BUNGEE.getChannel(), player, packet.toByteArray());
+        if (messageFirst) {
+            server.addPlayer(arriving);
+            server.getPluginManager().callEvent(new org.bukkit.event.player.PlayerJoinEvent(arriving, (String) null));
+        }
+        StargateTestHelper.runAllTasks();
+        Assertions.assertTrue(arriving.getLocation().distanceSquared(target.getExit()) < 100,
+                "A valid forwarded U request must arrive at the reloaded gate, not the previous login location");
+        Assertions.assertNull(plugin.getBungeeManager().pullFromQueue("incoming"));
+    }
+
+    @Test
+    void ownerAndNetworkChangesSurvivePluginReload() throws Exception {
+        StargateTestHelper.runAllTasks();
+        UUID owner = UUID.randomUUID();
+        Network target = plugin.getNetworkManager().createNetwork("moved", NetworkType.CUSTOM, StorageType.LOCAL, false);
+        portal.setOwner(owner);
+        portal.setNetwork(target);
+        plugin.reload();
+        StargateTestHelper.runAllTasks();
+        RealPortal loaded = (RealPortal) plugin.getRegistry().getNetwork("moved", StorageType.LOCAL).getPortal(PORTAL1);
+        assertNotNull(loaded);
+        Assertions.assertEquals(owner, loaded.getOwnerUUID());
+        Network old = plugin.getRegistry().getNetwork("network", StorageType.LOCAL);
+        Assertions.assertTrue(old == null || old.getPortal(PORTAL1) == null);
+        Assertions.assertFalse(loaded.getGate().getPortalPositions().isEmpty());
+    }
+
     @Test
     void disableCancelsWorldTasksAndDrainsAcceptedWrites() {
         AtomicInteger writes = new AtomicInteger();

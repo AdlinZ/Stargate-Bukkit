@@ -88,16 +88,19 @@ public interface Portal {
      * Changes the network this portal belongs to
      *
      * @param targetNetwork <p>The new network this portal should belong to</p>
-     * @throws NameConflictException <p>If the given network name is invalid</p>
+     * @throws NameConflictException <p>If a portal with this name already exists in the target network</p>
+     * @throws IllegalArgumentException <p>If moving a saved core portal across storage types or changing a legacy U route</p>
+     * @throws IllegalStateException <p>If a saved core portal's database update fails; its network remains unchanged</p>
      */
     void setNetwork(Network targetNetwork) throws NameConflictException;
 
     /**
      * Changes the player this portal belongs to
      *
-     * <p>DOES NOT SAVE TO DATABASE</p>
+     * <p>Saved core portals persist this change before publishing it in memory.</p>
      *
      * @param targetPlayer <p>The new player this portal should belong to</p>
+     * @throws IllegalStateException <p>If the database update fails; the owner remains unchanged</p>
      */
     void setOwner(UUID targetPlayer);
 

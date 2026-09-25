@@ -80,3 +80,4 @@ adminReload=Configuration reloaded!
 adminInfo=Running version %version%. Changelog: https://git.io/JD4Qo
 adminHelp=StarGate's documentation can be found at https://git.io/JDclf
 translatedBy=Pheotis
+tpDestBlocked=No safe arrival space is available beside the destination gate.

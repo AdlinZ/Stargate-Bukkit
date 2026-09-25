@@ -127,6 +127,12 @@ public class SQLDatabase implements StorageAPI {
 
     @Override
     public boolean savePortalToStorage(RealPortal portal) throws StorageWriteException {
+        synchronized (portal) {
+            return savePortalSnapshot(portal);
+        }
+    }
+
+    private boolean savePortalSnapshot(RealPortal portal) throws StorageWriteException {
         StorageType portalType = portal.getStorageType();
         /* An SQL transaction is used here to make sure partial data is never added to the database. */
         Connection connection = null;
@@ -135,7 +141,16 @@ public class SQLDatabase implements StorageAPI {
             connection.setAutoCommit(false);
 
             try (PreparedStatement savePortalStatement = sqlQueryGenerator.generateAddPortalStatement(connection, portal, portalType)) {
-                savePortalStatement.execute();
+                try {
+                    savePortalStatement.execute();
+                } catch (SQLException e) {
+                    // Only classify a duplicate portal INSERT, not unrelated foreign-key failures.
+                    if (e.getErrorCode() == 1062 || e.getErrorCode() == 19
+                            && e.getMessage().contains("UNIQUE constraint failed")) {
+                        throw new PortalIdentitySQLException(e);
+                    }
+                    throw e;
+                }
             }
 
             try (PreparedStatement addFlagStatement = sqlQueryGenerator.generateAddPortalFlagRelationStatement(connection, portalType)) {
@@ -149,7 +164,7 @@ public class SQLDatabase implements StorageAPI {
             connection.setAutoCommit(true);
             connection.close();
             if (portal instanceof StargatePortal stargatePortal) {
-                stargatePortal.setSavedToStorage();
+                stargatePortal.setSavedToStorage(this);
             }
             return true;
         } catch (SQLException exception) {
@@ -162,8 +177,15 @@ public class SQLDatabase implements StorageAPI {
             } catch (SQLException e) {
                 throw new StorageWriteException(e);
             }
+            if (exception instanceof PortalIdentitySQLException) {
+                throw new org.sgrewritten.stargate.exception.database.PortalStorageConflictException(exception);
+            }
             throw new StorageWriteException(exception);
         }
+    }
+
+    private static class PortalIdentitySQLException extends SQLException {
+        PortalIdentitySQLException(SQLException cause) { super(cause); }
     }
 
     @Override
@@ -321,7 +343,7 @@ public class SQLDatabase implements StorageAPI {
             return;
         }
         if (portal instanceof StargatePortal stargatePortal) {
-            stargatePortal.setSavedToStorage();
+            stargatePortal.setSavedToStorage(this);
         }
         gate.assignPortal(portal);
         // Shutdown cannot safely change Folia regions. Reconcile the persisted
@@ -711,5 +733,51 @@ public class SQLDatabase implements StorageAPI {
     private record PortalLoadData(Collection<PortalData> loadedPortals, Collection<String> invalidWorlds,
                                   Collection<String> invalidGates) {
 
+    }
+
+    @Override
+    public void updatePortalOwner(Portal portal, UUID owner) throws StorageWriteException {
+        try (Connection connection = database.getConnection();
+             PreparedStatement statement = sqlQueryGenerator.generatePortalUpdate(connection, portal, owner.toString(), false)) {
+            if (statement.executeUpdate() != 1) throw new SQLException("Portal no longer exists in storage");
+        } catch (SQLException e) {
+            throw new StorageWriteException(e);
+        }
+    }
+
+    @Override
+    public void updatePortalNetwork(Portal portal, Network network) throws StorageWriteException {
+        try (Connection connection = database.getConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                boolean typeChanged = portal.getNetwork().getType() != network.getType();
+                if (typeChanged) {
+                    for (org.sgrewritten.stargate.network.NetworkType type : org.sgrewritten.stargate.network.NetworkType.values()) {
+                        DatabaseHelper.runStatement(sqlQueryGenerator.generateRemoveFlagStatement(connection,
+                                portal.getStorageType(), portal, type.getRelatedFlag().getCharacterRepresentation()));
+                    }
+                }
+                // Foreign keys cascade the identity change to positions and flags.
+                try (PreparedStatement statement = sqlQueryGenerator.generatePortalUpdate(connection, portal, network.getId(), true)) {
+                    if (statement.executeUpdate() != 1) throw new SQLException("Portal no longer exists in storage");
+                }
+                if (typeChanged) {
+                    try (PreparedStatement flags = sqlQueryGenerator.generateAddPortalFlagRelationStatement(connection, portal.getStorageType())) {
+                        flags.setString(1, portal.getName());
+                        flags.setString(2, network.getId());
+                        flags.setString(3, String.valueOf(network.getType().getRelatedFlag().getCharacterRepresentation()));
+                        flags.executeUpdate();
+                    }
+                }
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            throw new StorageWriteException(e);
+        }
     }
 }

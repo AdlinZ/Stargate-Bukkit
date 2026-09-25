@@ -4,6 +4,8 @@ package org.sgrewritten.stargate.database;
  * All SQL queries used by this plugin
  */
 public enum SQLQuery {
+    UPDATE_PORTAL_OWNER, UPDATE_INTER_PORTAL_OWNER,
+    MOVE_PORTAL_NETWORK, MOVE_INTER_PORTAL_NETWORK,
 
     /**
      * The query for creating the portal table

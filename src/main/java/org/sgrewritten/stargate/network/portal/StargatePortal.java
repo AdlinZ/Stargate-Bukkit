@@ -87,7 +87,8 @@ public class StargatePortal implements RealPortal {
     private final StargateEconomyAPI economyManager;
     private static final int ACTIVE_DELAY = 15 * 20; // ticks
     private @Nullable String metaData;
-    private boolean savedToStorage = false;
+    private volatile boolean savedToStorage = false;
+    private org.sgrewritten.stargate.api.database.StorageAPI savedStorage;
     private PortalBehavior behavior;
     private boolean active = false;
 
@@ -242,18 +243,58 @@ public class StargatePortal implements RealPortal {
     }
 
     @Override
-    public void setNetwork(Network targetNetwork) throws NameConflictException {
+    public synchronized void setNetwork(Network targetNetwork) throws NameConflictException {
         Portal conflictingPortal = targetNetwork.getPortal(this.name);
         if (conflictingPortal != null && conflictingPortal != this) {
             throw new NameConflictException(String.format("Portal of name %s already exists in network %s", this.name, targetNetwork.getId()));
         }
+        if (this.network == targetNetwork) return;
+        if (savedToStorage && (targetNetwork.getStorageType() != getStorageType()
+                || hasFlag(StargateFlag.LEGACY_INTERSERVER))) {
+            throw new IllegalArgumentException("Saved portals can only move between networks of the same storage type; legacy U routes cannot be changed this way");
+        }
+        Network previous = this.network;
+        boolean registered = previous.getPortal(getName()) == this;
+        if (savedToStorage) {
+            try {
+                savedStorage.updatePortalNetwork(this, targetNetwork);
+            } catch (StorageWriteException e) {
+                throw new IllegalStateException("Could not persist portal network change", e);
+            }
+        }
+        if (registered) {
+            previous.getPluginMessageSender().sendDeletePortal(this);
+            previous.removePortal(this);
+        }
         this.network = targetNetwork;
-        updateState();
+        NetworkType.removeNetworkTypeRelatedFlags(flags);
+        flags.add(targetNetwork.getType().getRelatedFlag());
+        if (registered) {
+            targetNetwork.addPortal(this);
+            targetNetwork.getPluginMessageSender().sendCreatePortal(this);
+            previous.updatePortals();
+            targetNetwork.updatePortals();
+        } else {
+            updateState();
+        }
     }
 
     @Override
-    public void setOwner(UUID targetPlayer) {
+    public synchronized void setOwner(UUID targetPlayer) {
+        Objects.requireNonNull(targetPlayer);
+        if (targetPlayer.equals(this.ownerUUID)) return;
+        if (savedToStorage) {
+            try {
+                savedStorage.updatePortalOwner(this, targetPlayer);
+            } catch (StorageWriteException e) {
+                throw new IllegalStateException("Could not persist portal owner change", e);
+            }
+        }
         this.ownerUUID = targetPlayer;
+        if (savedToStorage) {
+            network.getPluginMessageSender().sendCreatePortal(this);
+            updateState();
+        }
     }
 
     @Override
@@ -572,8 +613,13 @@ public class StargatePortal implements RealPortal {
         return flags.contains(StargateFlag.BACKWARDS) ? getGate().getFacing() : getGate().getFacing().getOppositeFace();
     }
 
-    public void setSavedToStorage() {
+    public synchronized void setSavedToStorage(org.sgrewritten.stargate.api.database.StorageAPI storage) {
+        this.savedStorage = storage;
         this.savedToStorage = true;
+    }
+
+    public synchronized void setSavedToStorage() {
+        setSavedToStorage(Stargate.getStorageAPIStatic());
     }
 
     @Override

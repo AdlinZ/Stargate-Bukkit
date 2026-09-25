@@ -14,6 +14,8 @@ import org.sgrewritten.stargate.api.network.Network;
 import org.sgrewritten.stargate.api.network.NetworkManager;
 import org.sgrewritten.stargate.api.network.RegistryAPI;
 import org.sgrewritten.stargate.api.network.portal.Portal;
+import org.sgrewritten.stargate.api.network.portal.RealPortal;
+import org.sgrewritten.stargate.thread.task.StargateEntityTask;
 import org.sgrewritten.stargate.api.network.portal.flag.PortalFlag;
 import org.sgrewritten.stargate.config.ConfigurationHelper;
 import org.sgrewritten.stargate.exception.UnimplementedFlagException;
@@ -26,7 +28,9 @@ import org.sgrewritten.stargate.property.StargateProtocolProperty;
 import org.sgrewritten.stargate.property.StargateProtocolRequestType;
 import org.sgrewritten.stargate.util.BungeeHelper;
 
-import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.function.LongSupplier;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -36,7 +40,12 @@ public class StargateBungeeManager implements BungeeManager {
 
     private final RegistryAPI registry;
     private final @NotNull LanguageManager languageManager;
-    private final HashMap<String, Portal> bungeeQueue = new HashMap<>();
+    private final Map<String, QueuedPortal> bungeeQueue = new LinkedHashMap<>();
+    private final Map<String, Long> recentTeleports = new LinkedHashMap<>();
+    private final LongSupplier clock;
+    private static final long QUEUE_LIFETIME = 60_000;
+    private static final int MAX_PENDING = 4096;
+    private record QueuedPortal(Portal portal, long expiresAt) { }
     private final NetworkManager networkManager;
 
     /**
@@ -45,6 +54,12 @@ public class StargateBungeeManager implements BungeeManager {
      * @param networkManager <p>A network manager</p>
      */
     public StargateBungeeManager(@NotNull RegistryAPI registry, @NotNull LanguageManager languageManager, @NotNull NetworkManager networkManager) {
+        this(registry, languageManager, networkManager, System::currentTimeMillis);
+    }
+
+    StargateBungeeManager(RegistryAPI registry, LanguageManager languageManager, NetworkManager networkManager,
+                         LongSupplier clock) {
+        this.clock = clock;
         this.registry = Objects.requireNonNull(registry);
         this.languageManager = Objects.requireNonNull(languageManager);
         this.networkManager = Objects.requireNonNull(networkManager);
@@ -63,6 +78,13 @@ public class StargateBungeeManager implements BungeeManager {
             case NETWORK_RENAME -> {
                 String oldId = json.get(StargateProtocolProperty.NETWORK.toString()).getAsString();
                 String newId = json.get(StargateProtocolProperty.NEW_NETWORK_NAME.toString()).getAsString();
+                Network oldNetwork = registry.getNetwork(oldId, StorageType.INTER_SERVER);
+                Network newNetwork = registry.getNetwork(newId, StorageType.INTER_SERVER);
+                if (oldNetwork == null || oldNetwork == newNetwork) return;
+                if (newNetwork != null) {
+                    Stargate.log(Level.WARNING, "Ignoring network rename to an existing network: " + newId);
+                    return;
+                }
                 try {
                     registry.renameNetwork(newId, oldId, StorageType.INTER_SERVER);
                 } catch (InvalidNameException | UnimplementedFlagException | NameLengthException e) {
@@ -76,6 +98,13 @@ public class StargateBungeeManager implements BungeeManager {
                 Network network = registry.getNetwork(networkId, StorageType.INTER_SERVER);
                 if (network == null) {
                     Stargate.log(Level.WARNING, "Could not rename cross server portal, as network did not exist");
+                    return;
+                }
+                Portal oldPortal = network.getPortal(oldName);
+                Portal newPortal = network.getPortal(newName);
+                if (oldPortal == null || oldPortal == newPortal) return;
+                if (newPortal != null) {
+                    Stargate.log(Level.WARNING, "Ignoring portal rename to an existing portal: " + newName);
                     return;
                 }
                 try {
@@ -96,34 +125,39 @@ public class StargateBungeeManager implements BungeeManager {
         Set<PortalFlag> flags = PortalFlag.parseFlags(flagString);
         UUID ownerUUID = UUID.fromString(json.get(StargateProtocolProperty.OWNER.toString()).getAsString());
 
-        try {
-            networkManager.createNetwork(network, flags, false);
-        } catch (NameConflictException ignored) {
-        } catch (InvalidNameException | NameLengthException | UnimplementedFlagException e) {
-            Stargate.log(e);
+        Network targetNetwork = registry.getNetwork(network, StorageType.INTER_SERVER);
+        if (targetNetwork == null && requestType == StargateProtocolRequestType.PORTAL_REMOVE) {
+            return;
         }
         try {
-            Network targetNetwork = registry.getNetwork(network, StorageType.INTER_SERVER);
             if (targetNetwork == null) {
-                Stargate.log(Level.WARNING, "Unable to get inter-server network " + network);
+                targetNetwork = networkManager.createNetwork(network, flags, false);
+            }
+            Portal existing = targetNetwork.getPortal(portalName);
+            if (existing != null) {
+                if (existing instanceof RealPortal && server.equals(Stargate.getServerName())) {
+                    return; // Our own announcement must never replace/delete the real portal.
+                }
+                if (!(existing instanceof VirtualPortal remote) || !server.equals(remote.getServer())) {
+                    Stargate.log(Level.WARNING, "Ignoring conflicting inter-server portal " + portalName
+                            + " in " + network + " from server " + server);
+                    return;
+                }
+                if (requestType == StargateProtocolRequestType.PORTAL_ADD
+                        && ownerUUID.equals(existing.getOwnerUUID())
+                        && flags.equals(PortalFlag.parseFlags(existing.getAllFlagsString()))) {
+                    return;
+                }
+                targetNetwork.removePortal(existing);
+            } else if (requestType == StargateProtocolRequestType.PORTAL_REMOVE) {
                 return;
             }
-            VirtualPortal portal = new VirtualPortal(server, portalName, targetNetwork, flags, ownerUUID);
-            switch (requestType) {
-                case PORTAL_ADD -> {
-                    targetNetwork.addPortal(portal);
-                    Stargate.log(Level.FINE, String.format("Adding virtual portal %s in inter-server network %s", portalName, network));
-                }
-                case PORTAL_REMOVE -> {
-                    Stargate.log(Level.FINE, String.format("Removing virtual portal %s in inter-server network %s", portalName, network));
-                    targetNetwork.removePortal(portal);
-                }
-                default -> throw new UnsupportedOperationException();
-
+            if (requestType == StargateProtocolRequestType.PORTAL_ADD) {
+                targetNetwork.addPortal(new VirtualPortal(server, portalName, targetNetwork, flags, ownerUUID));
             }
             targetNetwork.updatePortals();
-        } catch (NameConflictException exception) {
-            Stargate.log(Level.FINE, exception);
+        } catch (NameConflictException | InvalidNameException | NameLengthException | UnimplementedFlagException e) {
+            Stargate.log(e);
         }
     }
 
@@ -137,7 +171,13 @@ public class StargateBungeeManager implements BungeeManager {
         String portalName = json.get(StargateProtocolProperty.PORTAL.toString()).getAsString();
         String networkName = json.get(StargateProtocolProperty.NETWORK.toString()).getAsString();
 
-        Player player = Bukkit.getServer().getPlayer(playerName);
+        String requestId = json.has(StargateProtocolProperty.REQUEST_ID.toString())
+                ? json.get(StargateProtocolProperty.REQUEST_ID.toString()).getAsString() : null;
+        if (duplicateTeleport(requestId == null ? "legacy:" + playerName + ":" + networkName + ":" + portalName
+                : "id:" + requestId, requestId == null ? 1000 : QUEUE_LIFETIME)) {
+            return;
+        }
+        Player player = Bukkit.getServer().getPlayerExact(playerName);
         if (player == null) {
             Stargate.log(Level.FINEST, "Player was null; adding to queue");
             addToQueue(playerName, portalName, networkName, StorageType.INTER_SERVER);
@@ -155,18 +195,25 @@ public class StargateBungeeManager implements BungeeManager {
             player.sendMessage(languageManager.getErrorMessage(TranslatableMessage.BUNGEE_INVALID_GATE));
             return;
         }
-        if (destinationPortal instanceof VirtualPortal) {
+        if (!(destinationPortal instanceof RealPortal) || destinationPortal.isDestroyed()) {
             Stargate.log(Level.WARNING, "The receiving portal for this bungee teleport message should not be a virtual portal, contact developers (do /sg for more info)");
             return;
         }
-        destinationPortal.teleportHere(player, null);
+        teleportOnPlayerThread(player, destinationPortal);
     }
 
     @Override
     public void legacyPlayerConnect(String message) {
         String bungeeNetworkName = ConfigurationHelper.getString(ConfigurationOption.LEGACY_BUNGEE_NETWORK);
 
-        String[] parts = message.split("#@#");
+        String[] parts = message.split("#@#", -1);
+        if (parts.length != 2 || parts[0].isEmpty() || parts[1].isEmpty()) {
+            Stargate.log(Level.WARNING, "Invalid legacy teleport request");
+            return;
+        }
+        if (duplicateTeleport("U:" + message, 1000)) {
+            return;
+        }
 
         String playerName = parts[0];
         String destination = parts[1];
@@ -199,7 +246,7 @@ public class StargateBungeeManager implements BungeeManager {
             }
 
             Stargate.log(Level.FINE, String.format("Teleporting player to destination portal '%s'", destinationPortal.getName()));
-            destinationPortal.teleportHere(player, null);
+            teleportOnPlayerThread(player, destinationPortal);
         }
     }
 
@@ -211,7 +258,7 @@ public class StargateBungeeManager implements BungeeManager {
      * @param networkName <p>The name of the network the entry portal belongs to</p>
      * @param storageType <p>Whether the entry portal belongs to an inter-server network</p>
      */
-    private void addToQueue(String playerName, String portalName, String networkName,
+    private synchronized void addToQueue(String playerName, String portalName, String networkName,
                             StorageType storageType) {
         Network network = registry.getNetwork(networkName, storageType);
 
@@ -232,11 +279,41 @@ public class StargateBungeeManager implements BungeeManager {
             String msg = String.format("Inter-server portal ''%s'' in network ''%s'' could not be found", portalName, networkName);
             Stargate.log(Level.WARNING, msg);
         }
-        bungeeQueue.put(playerName, portal);
+        if (!(portal instanceof RealPortal) || portal.isDestroyed()) {
+            return;
+        }
+        bungeeQueue.values().removeIf(entry -> entry.expiresAt() <= clock.getAsLong());
+        if (bungeeQueue.size() >= MAX_PENDING) {
+            bungeeQueue.remove(bungeeQueue.keySet().iterator().next());
+        }
+        bungeeQueue.put(playerName, new QueuedPortal(portal, clock.getAsLong() + QUEUE_LIFETIME));
     }
 
     @Override
-    public Portal pullFromQueue(String playerName) {
-        return bungeeQueue.remove(playerName);
+    public synchronized Portal pullFromQueue(String playerName) {
+        QueuedPortal entry = bungeeQueue.remove(playerName);
+        return entry == null || entry.expiresAt() <= clock.getAsLong() || entry.portal().isDestroyed()
+                ? null : entry.portal();
+    }
+
+    private synchronized boolean duplicateTeleport(String key, long lifetime) {
+        long now = clock.getAsLong();
+        recentTeleports.values().removeIf(expiry -> expiry <= now);
+        if (recentTeleports.containsKey(key)) return true;
+        if (recentTeleports.size() >= MAX_PENDING) {
+            recentTeleports.remove(recentTeleports.keySet().iterator().next());
+        }
+        recentTeleports.put(key, now + lifetime);
+        return false;
+    }
+
+    private void teleportOnPlayerThread(Player player, Portal destination) {
+        if (!(destination instanceof RealPortal)) return;
+        new StargateEntityTask(player) {
+            @Override
+            public void run() {
+                if (player.isOnline() && !destination.isDestroyed()) destination.teleportHere(player, null);
+            }
+        }.runNow();
     }
 }

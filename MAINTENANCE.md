@@ -123,6 +123,72 @@ plugin reloads that verify rendered buttons, database rows and recovery after an
 obstruction is removed. Real-server testing with StargateMechanics and Folia is
 still required. Cross-server duplicate messaging (#305/#313) is a separate batch.
 
+## Fifth maintenance batch: remaining confirmed defects
+
+This batch covers upstream #305/#313, #375, the owner/network persistence portion
+of #244, and the duplicate shared-storage creation path from #367. It also hardens
+U-gate arrival handling relevant to #364; the original Velocity configuration and
+real proxy/server combination have not been reproduced.
+
+- Proxy forwards use one online carrier instead of broadcasting through every
+  player. Replayed remote announcements are idempotent, metadata can refresh, and
+  a message from another server cannot remove or replace a local/different-server
+  gate. Rename replay is harmless and cannot overwrite an occupied target name.
+- New JSON teleport requests carry a UUID. Receivers remember request IDs for
+  60 seconds; old JSON/U packets without IDs receive a 1-second duplicate window.
+  Both the deduplication cache and pending arrival queue are capped at 4096 entries;
+  arrivals expire after 60 seconds. These are bounded compatibility protections,
+  not durable exactly-once delivery. A new request ID permits another immediate trip.
+- Pending arrivals only retain real, non-destroyed portals. Online and join-time
+  arrivals execute on the player's scheduler. Wire-envelope and plugin reload
+  tests cover U messages arriving before and after player join. The raw modified
+  UTF payload remains compatible with BungeeCord/BungeeBark Forward framing.
+- Newer non-living entities with the public leash API (including Paper 1.21 boats)
+  participate in relation traversal. Reflection retains the existing 1.20.6 compile
+  baseline; old boats remain supported without leash methods. Relationship cycles
+  visit/charge an entity once. Disabled leash handling excludes those entities.
+- Passenger/leash attachment waits for both results and checks entity validity,
+  world, distance and Folia ownership. Partial success does not join entities across
+  regions. Both failures may restore the original relationship when still safely
+  co-located. Source-task cancellation, changed leashes and retirement release boat
+  bookkeeping. This is covered with simulated futures/schedulers, not real Folia.
+- No safe arrival location now produces a localized message, clears boat markers
+  and refunds an accepted local charge instead of dereferencing a null destination.
+- Saved core owner/network edits write storage before changing memory. Moves cascade
+  flags/positions atomically and update both network registries; network-type flags
+  are changed transactionally. Failed writes preserve the old owner/network.
+  Initial saves synchronize with these edits. Moving between local and inter-server
+  storage, or changing saved U routes with `setNetwork`, is explicitly rejected;
+  these require a separate migration API. Custom storage adapters must implement the
+  new default mutation methods to support editing saved core portals.
+- Shared gate creation commits its SQL transaction before registration, announcement
+  or a success response. A duplicate key becomes a normal name conflict. Database
+  failures leave the new gate unregistered and the builder refunds creation charges.
+  The shared database remains the authority even with stale registries on two servers.
+
+**Latency tradeoff:** the current portal-building/setter API is synchronous. Shared
+creation and saved owner/network edits now wait for SQL confirmation; slow/unavailable
+MySQL can delay that caller's server/region tick. Normal local creation retains its
+queued write. An asynchronous creation API is a separate follow-up.
+
+Validation: JDK 21 full `mvn verify`, disposable MySQL 8.4 and SQLite, **722 tests:
+720 passed, 2 existing furnace-minecart skips**. Includes 39 explicitly added regression
+cases, plus existing parameterized cases expanded by the new translation key. Disabling
+persistence, shared reservation and non-living leash support makes their regressions fail.
+Restoring the original broadcaster sends three packets for three players instead of one.
+
+For #364, BungeeBark's upstream instructions require disabling Velocity's native
+`bungee-plugin-message-channel` when BungeeBark handles that channel. Its Forward
+handler queues messages for empty servers; the plugin cannot infer that BungeeBark is
+installed merely from a GetServer response. Validate the actual proxy configuration,
+empty target-server queue and return trip before declaring the original report fixed.
+No proxy plugin was modified and no real server compatibility claim is made here.
+
+Sources: [Paper messaging format](https://docs.papermc.io/paper/dev/plugin-messaging/),
+[Paper 1.21.1 Boat API](https://jd.papermc.io/paper/1.21.1/org/bukkit/entity/Boat.html),
+[BungeeBark Forward](https://github.com/RoinujNosde/BungeeBark/blob/main/src/main/java/me/roinujnosde/bungeebark/methods/Forward.java),
+[upstream #364 configuration discussion](https://github.com/stargate-rewritten/Stargate-Bukkit/issues/364).
+
 ## Build and test
 
 Use JDK 21 and Maven 3.9+. The current compile target remains Paper API 1.20.6;
@@ -174,8 +240,8 @@ Java version, plugin commit and logs for each check:
 
 ## Follow-up work
 
-- Await all involved teleports before reattaching passengers and leashes; validate
-  that both entities are still in the same owning region before attachment.
+- Validate the new completion/ownership checks for passengers and leashes on real
+  Paper/Folia servers, including partial failure and cross-region boundaries.
 - Perform cross-world safe-spawn block reads on the correct destination regions.
 - Audit refunds, cancelled/failed teleports and cleanup of in-flight boat state.
 - Validate startup/shutdown on real Folia, including portals spanning regions,

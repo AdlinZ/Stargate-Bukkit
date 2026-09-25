@@ -215,4 +215,15 @@ public interface StorageAPI {
      * @param world <p>A world</p>
      */
     void loadPortalsInWorld(World world, StorageType storageType, StargateAPI stargateAPI) throws StorageReadException, StorageWriteException;
+
+    /** Persist an owner change before publishing it to callers. */
+    default void updatePortalOwner(Portal portal, java.util.UUID owner) throws StorageWriteException {
+        throw new UnsupportedOperationException("Storage does not support owner updates");
+    }
+
+    /** Move a portal and its dependent records atomically within one storage type. */
+    default void updatePortalNetwork(Portal portal, org.sgrewritten.stargate.api.network.Network network)
+            throws StorageWriteException {
+        throw new UnsupportedOperationException("Storage does not support network moves");
+    }
 }

@@ -75,6 +75,8 @@ public class SQLiteDatabaseTest {
         tester.setPortalPositionMetaTest(StorageType.INTER_SERVER);
         tester.changeNames(StorageType.LOCAL);
         tester.changeNames(StorageType.INTER_SERVER);
+        tester.mutationAndSharedConflict(StorageType.LOCAL);
+        tester.mutationAndSharedConflict(StorageType.INTER_SERVER);
         tester.destroyPortalTest();
         tester.destroyInterPortalTest();
     }

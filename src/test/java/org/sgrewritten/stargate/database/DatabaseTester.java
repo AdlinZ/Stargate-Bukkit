@@ -581,4 +581,31 @@ public class DatabaseTester {
         statement.close();
     }
 
+
+    void mutationAndSharedConflict(StorageType type) throws SQLException, TranslatableException, StorageWriteException,
+            InvalidStructureException, GateConflictException, NoFormatFoundException {
+        Network before = new StargateNetwork("mutation", NetworkType.CUSTOM, type);
+        Network after = new StargateNetwork("moved", NetworkType.CUSTOM, type);
+        RealPortal portal = new TestPortalBuilder(stargateAPI.getRegistry(), world).setNetwork(before)
+                .setStorageType(type).setName("MutationGate").build();
+        portalDatabaseAPI.savePortalToStorage(portal);
+        UUID owner = UUID.randomUUID();
+        portal.setOwner(owner);
+        portal.setNetwork(after);
+        String table = type == StorageType.LOCAL ? nameConfig.getPortalTableName() : nameConfig.getInterPortalTableName();
+        try (Connection fresh = database.getConnection();
+             PreparedStatement statement = fresh.prepareStatement("SELECT ownerUUID, network FROM " + table + " WHERE name = ?")) {
+            statement.setString(1, "MutationGate");
+            try (ResultSet rows = statement.executeQuery()) {
+                Assertions.assertTrue(rows.next());
+                Assertions.assertEquals(owner.toString(), rows.getString("ownerUUID"));
+                Assertions.assertEquals("moved", rows.getString("network"));
+            }
+        }
+        RealPortal duplicate = new TestPortalBuilder(stargateAPI.getRegistry(), world).setNetwork(after)
+                .setStorageType(type).setName("MutationGate").build();
+        Assertions.assertThrows(org.sgrewritten.stargate.exception.database.PortalStorageConflictException.class,
+                () -> portalDatabaseAPI.savePortalToStorage(duplicate));
+        portalDatabaseAPI.removePortalFromStorage(portal);
+    }
 }
