@@ -30,6 +30,8 @@ import org.sgrewritten.stargate.util.VectorUtils;
 import org.sgrewritten.stargate.util.portal.TeleportationHelper;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 
 /**
@@ -38,7 +40,8 @@ import java.util.logging.Level;
 public class Teleporter {
 
     private static final double LOOK_FOR_LEASHED_RADIUS = 15;
-    private static final Set<Entity> boatsTeleporting = new HashSet<>();
+    private static final Set<UUID> boatsTeleporting = ConcurrentHashMap.newKeySet();
+    private final EntityTeleportation entityTeleportation;
 
     private Location exit;
     private final RealPortal origin;
@@ -66,6 +69,13 @@ public class Teleporter {
      */
     public Teleporter(@NotNull RealPortal destination, RealPortal origin, BlockFace destinationFace,
                       BlockFace entranceFace, int cost, String teleportMessage, LanguageManager languageManager, StargateEconomyAPI economyManager) {
+        this(destination, origin, destinationFace, entranceFace, cost, teleportMessage, languageManager,
+                economyManager, new EntityTeleportation(NonLegacyClass.REGIONIZED_SERVER.isImplemented()));
+    }
+
+    Teleporter(@NotNull RealPortal destination, RealPortal origin, BlockFace destinationFace,
+               BlockFace entranceFace, int cost, String teleportMessage, LanguageManager languageManager,
+               StargateEconomyAPI economyManager, EntityTeleportation entityTeleportation) {
         // Center the destination in the destination block
         this.exit = destination.getExit().clone().add(new Vector(0.5, 0, 0.5));
         this.destinationFace = destinationFace;
@@ -76,6 +86,7 @@ public class Teleporter {
         this.teleportMessage = teleportMessage;
         this.languageManager = Objects.requireNonNull(languageManager);
         this.economyManager = Objects.requireNonNull(economyManager);
+        this.entityTeleportation = Objects.requireNonNull(entityTeleportation);
     }
 
     /**
@@ -93,20 +104,18 @@ public class Teleporter {
 
         nearbyLeashed = getNearbyLeashedEntities(baseEntity);
 
-        TeleportedEntityRelationDFS dfs = new TeleportedEntityRelationDFS(this::hasPermissionAndBalance, nearbyLeashed);
-
-
-        hasPermission = dfs.depthFirstSearch(baseEntity);
-        Set<Entity> entitiesToTeleport = dfs.getEntitiesToTeleport();
-        //Check if already is teleporting and prevent entity to teleporting again
-        for (Entity entityToTeleport : entitiesToTeleport) {
-            if (boatsTeleporting.contains(entityToTeleport)) {
-                return;
-            }
+        // Reject an in-flight vessel before permission callbacks or economy charges.
+        TeleportedEntityRelationDFS dfs = new TeleportedEntityRelationDFS(
+                entity -> !boatsTeleporting.contains(entity.getUniqueId()), nearbyLeashed);
+        if (!dfs.depthFirstSearch(baseEntity)) {
+            return;
         }
+        Set<Entity> entitiesToTeleport = dfs.getEntitiesToTeleport();
+        hasPermission = new TeleportedEntityRelationDFS(this::hasPermissionAndBalance, nearbyLeashed)
+                .depthFirstSearch(baseEntity);
         entitiesToTeleport.forEach(entity -> {
             if (entity instanceof Boat) {
-                boatsTeleporting.add(entity);
+                boatsTeleporting.add(entity.getUniqueId());
             }
         });
 
@@ -128,6 +137,7 @@ public class Teleporter {
         if (world != null && !world.getWorldBorder().isInside(exit)) {
             String worldBorderInterfereMessage = languageManager.getErrorMessage(TranslatableMessage.OUTSIDE_WORLD_BORDER);
             entitiesToTeleport.forEach(entity -> entity.sendMessage(worldBorderInterfereMessage));
+            entitiesToTeleport.forEach(entity -> boatsTeleporting.remove(entity.getUniqueId()));
             return;
         }
         // Avoid collisions by teleporting the entity to a free location
@@ -216,6 +226,7 @@ public class Teleporter {
             return;
         }
         teleportedEntities.add(target);
+        exit = exit.clone();
         List<Entity> passengers = target.getPassengers();
         if (target.eject()) {
             Stargate.log(Level.FINER, "Ejected all passengers");
@@ -294,9 +305,9 @@ public class Teleporter {
      */
     private void teleport(Entity target, Location location, double rotation) {
         Vector direction = target.getLocation().getDirection();
-        Location exitPoint = location.setDirection(direction.rotateAroundY(rotation));
+        Location exitPoint = location.clone().setDirection(direction.rotateAroundY(rotation));
 
-        Vector velocity = target.getVelocity();
+        Vector velocity = target.getVelocity().clone();
         Vector targetVelocity = velocity.rotateAroundY(rotation).multiply(ConfigurationHelper.getDouble(
                 ConfigurationOption.GATE_EXIT_SPEED_MULTIPLIER));
 
@@ -312,10 +323,13 @@ public class Teleporter {
         }
 
         if (target instanceof PoweredMinecart poweredMinecart) {
-            teleportPoweredMinecart(poweredMinecart, targetVelocity, location);
+            teleportPoweredMinecart(poweredMinecart, targetVelocity, exitPoint);
         } else {
-            teleport(target, exitPoint);
-            target.setVelocity(targetVelocity);
+            teleport(target, exitPoint, success -> {
+                if (success) {
+                    target.setVelocity(targetVelocity);
+                }
+            });
         }
     }
 
@@ -334,14 +348,24 @@ public class Teleporter {
         }
         //Remove fuel and velocity to force the powered minecart to stop
         int fuel = poweredMinecart.getFuel();
+        Vector originalVelocity = poweredMinecart.getVelocity().clone();
         poweredMinecart.setFuel(0);
         poweredMinecart.setVelocity(new Vector());
 
         //Teleport the powered minecart
-        Stargate.log(Level.FINEST, "Teleporting Powered Minecart to " + exit);
-        teleport(poweredMinecart, exit);
-        poweredMinecart.setFuel(fuel);
+        Stargate.log(Level.FINEST, "Teleporting Powered Minecart to " + location);
+        teleport(poweredMinecart, location, success -> {
+            poweredMinecart.setFuel(fuel);
+            if (success) {
+                restorePoweredMinecartMomentum(poweredMinecart, targetVelocity, location);
+            } else {
+                poweredMinecart.setVelocity(originalVelocity);
+            }
+        });
+    }
 
+    private void restorePoweredMinecartMomentum(PoweredMinecart poweredMinecart, Vector targetVelocity,
+                                                Location location) {
         new StargateEntityTask(poweredMinecart) {
             @Override
             public void run() {
@@ -371,15 +395,17 @@ public class Teleporter {
      * @param exitPoint <p>The exit location to teleport the entity to</p>
      */
     private void teleport(Entity target, Location exitPoint) {
-        if (NonLegacyClass.REGIONIZED_SERVER.isImplemented()) {
-            target.teleportAsync(exitPoint);
-        } else {
-            target.teleport(exitPoint);
-        }
-        boatsTeleporting.remove(target);
-        if (origin != null && !origin.hasFlag(StargateFlag.SILENT)) {
-            MessageUtils.sendMessageFromPortal(origin, target, teleportMessage, MessageType.DENY);
-        }
+        teleport(target, exitPoint, success -> { });
+    }
+
+    private void teleport(Entity target, Location exitPoint, Consumer<Boolean> completion) {
+        UUID entityId = target.getUniqueId();
+        entityTeleportation.teleport(target, exitPoint, success -> {
+            completion.accept(success);
+            if (success && origin != null && !origin.hasFlag(StargateFlag.SILENT)) {
+                MessageUtils.sendMessageFromPortal(origin, target, teleportMessage, MessageType.DENY);
+            }
+        }, () -> boatsTeleporting.remove(entityId));
     }
 
 
