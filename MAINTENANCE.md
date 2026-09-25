@@ -225,6 +225,45 @@ Velocity/BungeeBark end-to-end behavior still require separate validation.
 Startup and ordinary shutdown passed; shutdown under active writes is not covered
 by this server probe.
 
+## Cold chunks and cross-world follow-up (2026-09-26)
+
+A second real-server probe explicitly checked that all nine chunks around each
+same-world destination were unloaded before invoking teleportation. All six
+routes passed. A one-route negative control with 1.0.0.18-ALPHA reproduced
+`Async chunk retrieval` and failed to arrive. The loaded-region restriction in
+the earlier probe therefore no longer describes the full verification scope.
+
+Further real-server checks passed for horse and boat passengers, a leashed boat,
+three leashed cows, and furnace-minecart arrival with retained fuel. The minecart
+had 977 fuel from an initial 1000 and continued moving after arrival. These tests
+used non-player passengers, not human clients. Database rows were unchanged
+across an ordinary stop/restart and the vehicle tests; SQLite integrity and
+foreign-key checks passed.
+
+A temporary in-memory destination portal and prepared landing area in the Nether
+then reproduced `Cannot read world asynchronously` in the safe-spawn search.
+Folia now loads the search-area chunks asynchronously, captures each chunk on
+its owning region, and evaluates immutable snapshots. Entity dimensions and
+candidate geometry are captured on the source thread, and completion returns
+to the entity scheduler before teleporting or reporting a blocked destination.
+The same path handles cross-world leash companions and source-less arrivals.
+A new leash attached during the wait is preserved. Snapshots describe the world
+at read time; they do not make later terrain changes atomic with teleportation.
+
+Real-server checks now pass for Overworld-to-Nether, Nether-to-Overworld, and
+source-less arrival, each including a leashed cow restored at the destination.
+The first trip explicitly used unloaded destination chunks. The temporary
+portal and test arena were never saved to the Stargate database. The probe lets
+newly spawned companions tick before invoking teleportation; an earlier fixture
+that invoked it immediately did not consistently include the new companion.
+
+Five snapshot-search regressions cover completion order, negative chunk borders
+and entity width, absent floor, load failure, and build-height boundaries. Full
+JDK 21 Maven verification with SQLite and MySQL: **730 tests, 728 passed, 2 existing
+skips**. Human sign/button interaction, concurrent-player load, a broad version
+matrix, proxy end-to-end delivery, and failure/refund/shutdown races remain
+outside this real-server validation. No release or upstream comment was made.
+
 ## Build and test
 
 Use JDK 21 and Maven 3.9+. The current compile target remains Paper API 1.20.6;
@@ -278,7 +317,8 @@ Java version, plugin commit and logs for each check:
 
 - Validate the new completion/ownership checks for passengers and leashes on real
   Paper/Folia servers, including partial failure and cross-region boundaries.
-- Perform cross-world safe-spawn block reads on the correct destination regions.
+- Extend cross-world snapshot-search validation to blocked exits, cancellation,
+  concurrent terrain changes and more entity/world combinations.
 - Audit refunds, cancelled/failed teleports and cleanup of in-flight boat state.
 - Validate startup/shutdown on real Folia, including portals spanning regions,
   pending database writes and queue timeout logs; add explicit Hikari pool closure.

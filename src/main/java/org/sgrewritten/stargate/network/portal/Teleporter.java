@@ -27,6 +27,7 @@ import org.sgrewritten.stargate.thread.task.StargateEntityTask;
 import org.sgrewritten.stargate.util.MessageUtils;
 import org.sgrewritten.stargate.util.VectorUtils;
 import org.sgrewritten.stargate.util.portal.TeleportationHelper;
+import org.sgrewritten.stargate.util.portal.AsyncSpawnSearch;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -154,14 +155,34 @@ public class Teleporter {
         }
         // Avoid collisions by teleporting the entity to a free location
         if (origin == null || !origin.getExit().getWorld().equals(world)) {
-            exit = TeleportationHelper.findViableSpawnLocation(baseEntity, destination);
-            if (exit == null) {
-                baseEntity.sendMessage(languageManager.getErrorMessage(TranslatableMessage.DESTINATION_BLOCKED));
-                cancelBeforeTeleport(entitiesToTeleport);
-                return;
-            }
+            findSafeSpawn(baseEntity, location -> {
+                if (location == null) {
+                    baseEntity.sendMessage(languageManager.getErrorMessage(TranslatableMessage.DESTINATION_BLOCKED));
+                    cancelBeforeTeleport(entitiesToTeleport);
+                    return;
+                }
+                exit = location;
+                betterTeleport(baseEntity, exit, rotation);
+            });
+            return;
         }
         scheduleTeleport(baseEntity, () -> betterTeleport(baseEntity, exit, rotation));
+    }
+
+    private void findSafeSpawn(Entity entity, Consumer<Location> continuation) {
+        CompletableFuture<Location> search;
+        try {
+            search = NonLegacyClass.REGIONIZED_SERVER.isImplemented()
+                    ? AsyncSpawnSearch.find(entity, destination)
+                    : CompletableFuture.completedFuture(TeleportationHelper.findViableSpawnLocation(entity, destination));
+        } catch (RuntimeException e) {
+            search = CompletableFuture.failedFuture(e);
+        }
+        search.whenComplete((location, error) -> scheduleTeleport(entity, () -> {
+            if (error != null) Stargate.log(error);
+            continuation.accept(error == null && !destination.isDestroyed()
+                    && (origin == null || !origin.isDestroyed()) ? location : null);
+        }));
     }
 
     private void cancelBeforeTeleport(Set<Entity> entities) {
@@ -309,14 +330,22 @@ public class Teleporter {
                     cancelPendingBranch(entity, new HashSet<>());
                     return;
                 }
-                Location modifiedExit = exit.getWorld() == entity.getWorld() ? exit
-                        : TeleportationHelper.findViableSpawnLocation(entity, destination);
-                if (modifiedExit == null) {
-                    cancelPendingBranch(entity, new HashSet<>());
-                    entity.sendMessage(languageManager.getErrorMessage(TranslatableMessage.DESTINATION_BLOCKED));
-                    return;
+                if (exit.getWorld() == entity.getWorld()) {
+                    betterTeleport(entity, exit, rotation);
+                } else {
+                    findSafeSpawn(entity, modifiedExit -> {
+                        if (LeashSupport.holder(entity) != null) {
+                            cancelPendingBranch(entity, new HashSet<>());
+                            return;
+                        }
+                        if (modifiedExit == null) {
+                            cancelPendingBranch(entity, new HashSet<>());
+                            entity.sendMessage(languageManager.getErrorMessage(TranslatableMessage.DESTINATION_BLOCKED));
+                            return;
+                        }
+                        betterTeleport(entity, modifiedExit, rotation);
+                    });
                 }
-                betterTeleport(entity, modifiedExit, rotation);
             });
         }
     }
