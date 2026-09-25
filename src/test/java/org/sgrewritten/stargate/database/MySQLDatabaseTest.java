@@ -39,7 +39,7 @@ public class MySQLDatabaseTest {
             throw new IllegalArgumentException("You need to set MySQL credentials to run this test!");
         }
 
-        SQLDatabaseAPI database = new MySqlDatabase(driver, address, port, databaseName, username, password, false);
+        SQLDatabaseAPI database = new MySqlDatabase(driver, address, port, databaseName, username, password, true);
         this.nameConfig = new TableNameConfiguration("SG_Test_", "Server_");
         SQLQueryGenerator generator = new SQLQueryGenerator(nameConfig, DatabaseDriver.MYSQL);
         tester = new DatabaseTester(database, nameConfig, generator, true);

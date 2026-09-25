@@ -27,13 +27,15 @@ the server version and Java runtime used in #390 were Folia 26.1.2 and Java 25.
 
 ```sh
 # Unit tests and SQLite integration tests, without a MySQL server
-mvn -B '-Dtest=*,!MySQLDatabaseTest' verify
+mvn -B '-Dtest=*,!MySQLDatabaseTest,!StargateTest' verify
 
 # Focused teleport regression tests
 mvn -B -Dtest=TeleporterTest test
 ```
 
-For the complete suite, use a disposable MySQL database. The integration test
+For the complete suite, use a disposable MySQL database with TLS enabled (MySQL
+8.4 generates test certificates automatically). Both `MySQLDatabaseTest` and the
+plugin lifecycle tests in `StargateTest` use it. The integration test
 **drops and recreates the database named `Stargate`**. Never point it at a server
 containing production data. Create `src/test/resources/mysql_credentials.secret`
 (ignored by Git) with these keys, then run `mvn -B verify`:

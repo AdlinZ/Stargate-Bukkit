@@ -164,7 +164,7 @@ class StargateTest {
         plugin.setConfigurationOptionValue(ConfigurationOption.BUNGEE_USERNAME, credentialsManager.getCredentialString(TestCredential.MYSQL_DB_USER, "root"));
         plugin.setConfigurationOptionValue(ConfigurationOption.BUNGEE_PASSWORD, credentialsManager.getCredentialString(TestCredential.MYSQL_DB_PASSWORD, "root"));
         plugin.setConfigurationOptionValue(ConfigurationOption.BUNGEE_PORT, credentialsManager.getCredentialInt(TestCredential.MYSQL_DB_PORT, 3306));
-        plugin.setConfigurationOptionValue(ConfigurationOption.BUNGEE_USE_SSL, false);
+        plugin.setConfigurationOptionValue(ConfigurationOption.BUNGEE_USE_SSL, true);
         plugin.setConfigurationOptionValue(ConfigurationOption.BUNGEE_DATABASE, credentialsManager.getCredentialString(TestCredential.MYSQL_DB_NAME, "Stargate"));
     }
 

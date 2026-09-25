@@ -245,7 +245,9 @@ public final class FileHelper {
         File path = new File(dataFolder, internalFolder);
         if (!path.exists() && path.mkdir()) {
             try {
-                Files.setAttribute(path.toPath(), "dos:hidden", true);
+                if (Files.getFileStore(path.toPath()).supportsFileAttributeView("dos")) {
+                    Files.setAttribute(path.toPath(), "dos:hidden", true);
+                }
             } catch (IOException e) {
                 Stargate.log(e);
             }
