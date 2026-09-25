@@ -1,4 +1,10 @@
-> ### **Support Discord** __**[Link](https://sgrewritten.org/discord)**__
+> This is the [AdlinZ maintenance fork](https://github.com/AdlinZ/Stargate-Bukkit) of
+> [Stargate Rewritten](https://github.com/stargate-rewritten/Stargate-Bukkit).
+> Upstream announced that it is no longer maintained in
+> [issue #390](https://github.com/stargate-rewritten/Stargate-Bukkit/issues/390#issuecomment-5780383363).
+> Report fork-specific problems in [this repository's issues](https://github.com/AdlinZ/Stargate-Bukkit/issues).
+> See [maintenance status, build instructions and validation plans](MAINTENANCE.md).
+> The original project's documentation and credits are preserved below.
 
 # Stargate-Bukkit
 
