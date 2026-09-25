@@ -1,5 +1,15 @@
 # Changes
 
+#### Unreleased — maintenance fork, second batch
+
+- Wait for Folia teleport completion and dispatch entity updates to the owning scheduler.
+- Apply exit velocity and arrival messages only after a successful teleport.
+- Restore furnace-minecart fuel after completion and original velocity on failure.
+- Keep boat teleport markers until completion, use concurrent UUID bookkeeping,
+  and reject duplicate attempts before permission checks or charges.
+- Add controlled asynchronous regression tests. Real Folia validation, passenger
+  and leash coordination, cross-world safe-spawn checks and refund handling remain pending.
+
 #### [Version 1.0.0.18] Stargate-Rewritten
 
 - Fixed a series of problems in Stargate's multiworld support.

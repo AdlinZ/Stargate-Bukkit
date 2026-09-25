@@ -20,6 +20,33 @@ The regression test rejects synchronous remote chunk retrieval while exercising
 the public teleporter entry point. MockBukkit cannot establish Folia region thread
 safety; a passing test does not replace validation on a real server.
 
+## Second maintenance batch: teleport completion
+
+Ordinary entity exit velocity and furnace-minecart fuel restoration now wait for
+the teleport result. Folia completion work is dispatched through the entity
+scheduler, so an already-completed future or an off-thread completion cannot run
+entity mutations on the wrong region. Paper retains synchronous completion.
+
+Failed teleports do not apply exit velocity or send the arrival message. Furnace
+minecarts regain their saved fuel and original velocity when the teleport fails.
+Entity retirement and scheduler rejection only clear plugin bookkeeping; they do
+not attempt to modify a removed entity. Each teleport snapshots its destination
+and velocity before using them in later work.
+
+The in-flight boat registry uses UUIDs in a concurrent set. Boats remain marked
+until completion or retirement, and duplicate attempts are rejected before
+permission events or economy charges. World-border rejection also releases boat
+markers. This does not address all pre-teleport failures or refund paths.
+
+Deterministic tests advance the future and a simulated entity scheduler separately
+to check successful, failed, exceptional and already-completed teleports, rejected
+or retired scheduling, velocity/fuel restoration, messages and boat retries. These
+are unit tests, not a real Folia server or region-ownership simulation.
+
+Passenger and leash reattachment, cross-world safe-spawn reads, and full failure
+refund handling remain out of scope for this batch. Real-server verification is
+still required before either maintenance batch becomes a stable release.
+
 ## Build and test
 
 Use JDK 21 and Maven 3.9+. The current compile target remains Paper API 1.20.6;
@@ -68,8 +95,8 @@ Java version, plugin commit and logs for each check:
 
 ## Follow-up work
 
-- Await asynchronous teleport completion before restoring velocity, fuel,
-  passengers and leashes; run entity mutations on the owning entity scheduler.
+- Await all involved teleports before reattaching passengers and leashes; validate
+  that both entities are still in the same owning region before attachment.
 - Perform cross-world safe-spawn block reads on the correct destination regions.
 - Audit refunds, cancelled/failed teleports and cleanup of in-flight boat state.
 - Audit shared mutable state and scheduler registration during plugin shutdown.
