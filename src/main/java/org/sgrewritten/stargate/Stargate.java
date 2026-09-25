@@ -135,6 +135,7 @@ public class Stargate extends JavaPlugin implements StargateAPI, ConfigurationAP
         // TEMPORARY FIX FOR CUSTOM WORLD PLUGINS
         try {
             Stargate.setInstance(this);
+            StargateQueuedAsyncTask.enableAsyncQueue(threadQueueId);
             if (!new File(this.getDataFolder(), StargateConstant.CONFIG_FILE).exists()) {
                 super.saveDefaultConfig();
             }
@@ -157,7 +158,6 @@ public class Stargate extends JavaPlugin implements StargateAPI, ConfigurationAP
 
             registerListeners();
             StargateRegionTask.startPopulator(this);
-            StargateQueuedAsyncTask.enableAsyncQueue(threadQueueId);
             registerCommands();
             sendWarningMessages();
 
@@ -458,11 +458,11 @@ public class Stargate extends JavaPlugin implements StargateAPI, ConfigurationAP
 
     @Override
     public void onDisable() {
-        //Close networked always-on Stargates as they have no destination on next start
-        registry.getNetworkRegistry(StorageType.LOCAL).closeAllPortals();
-        registry.getNetworkRegistry(StorageType.INTER_SERVER).closeAllPortals();
+        // Scheduling is already disabled here. Never mutate arbitrary Folia regions
+        // or replay queued tasks on the shutdown thread.
+        StargateTask.cancelScheduledTasks();
+        StargateRegionTask.clearPopulator();
         StargateQueuedAsyncTask.disableAsyncQueue(threadQueueId);
-        StargateTask.forceRunAllTasks();
         if (ConfigurationHelper.getBoolean(ConfigurationOption.USING_BUNGEE)) {
             Messenger messenger = Bukkit.getMessenger();
             messenger.unregisterOutgoingPluginChannel(this);
@@ -471,15 +471,15 @@ public class Stargate extends JavaPlugin implements StargateAPI, ConfigurationAP
 
         if (NonLegacyClass.REGIONIZED_SERVER.isImplemented()) {
             getServer().getGlobalRegionScheduler().cancelTasks(this);
+            getServer().getAsyncScheduler().cancelTasks(this);
         } else {
             getServer().getScheduler().cancelTasks(this);
         }
         setInstance(null);
 
-        if (!ConfigurationHelper.getBoolean(ConfigurationOption.USING_BUNGEE)) {
-            return;
+        if (servicesManager != null) {
+            servicesManager.unregisterAll(this);
         }
-        servicesManager.unregisterAll(this);
     }
 
     /**

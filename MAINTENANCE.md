@@ -45,7 +45,47 @@ are unit tests, not a real Folia server or region-ownership simulation.
 
 Passenger and leash reattachment, cross-world safe-spawn reads, and full failure
 refund handling remain out of scope for this batch. Real-server verification is
-still required before either maintenance batch becomes a stable release.
+still required before any maintenance batch becomes a stable release.
+
+## Third maintenance batch: task lifecycle
+
+All task wrappers expose delays and periods in ticks. Folia asynchronous calls
+convert them to milliseconds, while Paper repeating asynchronous work now uses
+the asynchronous scheduler. Entity, region and global Folia timers normalize an
+immediate start to the next tick. The server-name request uses a 20-tick period;
+the Bungee readiness poll cancels its timer after delivering its one-shot action.
+
+Cancellation retains every returned scheduler handle, including entity tasks
+before their first callback. Completed or cancelled tasks reject late callbacks
+and late handles, one-shot callbacks cannot race into duplicate execution, and
+repeating tasks remain tracked until cancellation or failure. Queued delayed and
+repeating tasks enter the same serial database queue and honour cancellation.
+
+Shutdown cancels scheduled work and clears the Paper populator instead of forcing
+world work to run on the shutdown thread. A dedicated database worker stops
+accepting submissions and drains accepted writes in order, with a 10-second wait.
+A timeout or interruption is logged explicitly: pending writes are **not**
+guaranteed saved if the process exits before that worker finishes. A replacement
+worker cannot start while the previous one is alive. Hikari pool disposal is a
+separate follow-up.
+
+Portal iris blocks are no longer changed during disable. Stored portals reconcile
+their iris to the closed material when loaded, before normal network updates
+reopen valid always-on destinations. Disabling without restarting can therefore
+leave visible portal blocks until Stargate loads again. Iris block lookup now
+happens inside the task for the block's region.
+
+The legacy `forceRunAllTasks()` helper is deprecated, excluded from production
+shutdown, rejects Folia/off-main-thread use, and never executes database work.
+Direct access to `StargateQueuedAsyncTask.asyncQueue` is deprecated; callers should
+submit through the task wrapper and use `waitForEmptyQueue()` for a bounded barrier.
+Add-ons overriding task internals must rebuild for the BukkitTask-based handle
+registration method.
+
+Regression tests cover simulated Folia handles, async tick conversion, Paper
+async execution, cancellation/retirement/late callbacks, Bungee poll completion,
+serial queued timers, barriers, timeout/restart handling, actual MockBukkit plugin
+disable, and persisted iris reconciliation. These are not real Folia region tests.
 
 ## Build and test
 
@@ -92,6 +132,9 @@ Java version, plugin commit and logs for each check:
 4. Test cross-world travel, horses/boats with passengers, leashed mobs and furnace
    minecarts separately. These involve additional paths outside the initial fix.
 5. Repeat the ordinary player and vehicle cases on Paper to check compatibility.
+6. Stop with open portals and pending saves, then restart and inspect iris blocks,
+   always-on destinations and saved portal edits. Test Bungee discovery with no
+   players initially online, then join and verify the polling task terminates.
 
 ## Follow-up work
 
@@ -99,8 +142,8 @@ Java version, plugin commit and logs for each check:
   that both entities are still in the same owning region before attachment.
 - Perform cross-world safe-spawn block reads on the correct destination regions.
 - Audit refunds, cancelled/failed teleports and cleanup of in-flight boat state.
-- Audit shared mutable state and scheduler registration during plugin shutdown.
-  The #390 log also contains an exception while disabling the plugin.
+- Validate startup/shutdown on real Folia, including portals spanning regions,
+  pending database writes and queue timeout logs; add explicit Hikari pool closure.
 - Establish a tested Paper/Folia version matrix before publishing a stable build.
 
 Open changes against this fork's `nightly` branch. Include a regression test and

@@ -318,6 +318,9 @@ public class SQLDatabase implements StorageAPI {
             stargatePortal.setSavedToStorage();
         }
         gate.assignPortal(portal);
+        // Shutdown cannot safely change Folia regions. Reconcile the persisted
+        // iris before network updates reopen any always-on destinations.
+        gate.close();
         network.addPortal(portal);
         StargatePortalLoadEvent event = new StargatePortalLoadEvent(portal);
         Bukkit.getPluginManager().callEvent(event);
