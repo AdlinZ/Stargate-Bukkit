@@ -87,6 +87,42 @@ async execution, cancellation/retirement/late callbacks, Bungee poll completion,
 serial queued timers, barriers, timeout/restart handling, actual MockBukkit plugin
 disable, and persisted iris reconciliation. These are not real Folia region tests.
 
+## Fourth maintenance batch: migration and loaded controls
+
+[Upstream #379](https://github.com/stargate-rewritten/Stargate-Bukkit/issues/379):
+legacy custom networks whose normalized name is `<@default@>` now migrate to
+`:<@default@>`, with a warning showing the mapping. The colon is the legacy field
+delimiter, so another valid legacy network cannot already use that name. This
+keeps the custom network separate from the actual default network, even when both
+contain a portal with the same name or import in the opposite order. A legacy
+configuration that intentionally uses `<@default@>` as its default network still
+loads as the default. This prevents new faulty imports; it does not rewrite
+already-migrated SQL databases or reconstruct portals lost in an earlier import.
+
+[Upstream #377](https://github.com/stargate-rewritten/Stargate-Bukkit/issues/377):
+loading a core-managed portal restores missing control records. An existing wall
+sign can regain its missing record; a non-always-on portal can regain a button
+at a free control location. Restored positions are registered, rendered and saved
+through the serial database queue. Repeated loads do not duplicate those records.
+Always-on portals do not gain a button. Registered add-on flags and positions
+owned by enabled plugins keep their add-on-controlled layout.
+
+Recovery does not replace unrelated occupied blocks, claim another portal's
+controls/frame/iris, or overwrite positions stored for an absent add-on. If there
+is no existing sign or safe button location, the portal is not registered for
+that load and a warning explains why. Its database record is retained so restoring
+the sign, clearing the obstruction or reinstalling the add-on can recover it.
+Missing-control checks run before the configured invalid-structure deletion path.
+No new sign is fabricated and no failed control repair deletes stored portal data.
+The existing validity policy still applies to other invalid gate structures.
+
+Regression tests cover legacy name normalization, configured defaults, import
+order and duplicate portal names with SQLite persistence; missing-control
+recovery, add-on ownership/flags, occupied positions and always-on gates; and
+plugin reloads that verify rendered buttons, database rows and recovery after an
+obstruction is removed. Real-server testing with StargateMechanics and Folia is
+still required. Cross-server duplicate messaging (#305/#313) is a separate batch.
+
 ## Build and test
 
 Use JDK 21 and Maven 3.9+. The current compile target remains Paper API 1.20.6;
