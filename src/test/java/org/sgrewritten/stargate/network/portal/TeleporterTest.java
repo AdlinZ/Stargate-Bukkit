@@ -1,6 +1,7 @@
 package org.sgrewritten.stargate.network.portal;
 
 import be.seeseemelk.mockbukkit.MockBukkitInject;
+import be.seeseemelk.mockbukkit.ChunkMock;
 import be.seeseemelk.mockbukkit.ServerMock;
 import be.seeseemelk.mockbukkit.WorldMock;
 import be.seeseemelk.mockbukkit.entity.HorseMock;
@@ -14,6 +15,8 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.sgrewritten.stargate.StargateAPIMock;
 import org.sgrewritten.stargate.StargateExtension;
 import org.sgrewritten.stargate.api.gate.ExplicitGateBuilder;
@@ -84,5 +87,42 @@ class TeleporterTest {
         teleporter.teleport(furnaceMinecart);
         StargateTestHelper.runAllTasks();
         Assertions.assertTrue(furnaceMinecart.hasTeleported());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {4096, -4096})
+    void teleport_DoesNotSynchronouslyAccessRemoteChunk(int destinationX) throws TranslatableException,
+            InvalidStructureException, GateConflictException, NoFormatFoundException {
+        RemoteChunkGuardWorld world = new RemoteChunkGuardWorld();
+        server.addWorld(world);
+        Network network = new StargateNetwork("remote", NetworkType.CUSTOM, StorageType.LOCAL);
+        RealPortal origin = generatePortal(network, "near", new Location(world, 0, 10, 0));
+        RealPortal destination = generatePortal(network, "far", new Location(world, destinationX, 10, 0));
+        HorseMock target = (HorseMock) world.spawnEntity(new Location(world, 0, 10, 0), EntityType.HORSE);
+        Teleporter remoteTeleporter = new Teleporter(destination, origin, destination.getGate().getFacing(),
+                origin.getGate().getFacing(), 0, "empty", new LanguageManagerMock(), new StargateEconomyManagerMock());
+
+        int chunkX = destination.getExit().getBlockX() >> 4;
+        int chunkZ = destination.getExit().getBlockZ() >> 4;
+        world.unloadChunk(chunkX, chunkZ);
+        Assertions.assertFalse(world.isChunkLoaded(chunkX, chunkZ));
+        world.rejectRemoteChunkAccess = true;
+        remoteTeleporter.teleport(target);
+        StargateTestHelper.runAllTasks();
+
+        Assertions.assertTrue(target.hasTeleported());
+        Assertions.assertEquals(destination.getExit().getX() + 0.5, target.getLocation().getX());
+    }
+
+    private static class RemoteChunkGuardWorld extends WorldMock {
+        private boolean rejectRemoteChunkAccess;
+
+        @Override
+        public ChunkMock getChunkAt(int x, int z) {
+            if (rejectRemoteChunkAccess && Math.abs(x) >= 255) {
+                throw new AssertionError("Source region must not synchronously access the remote chunk");
+            }
+            return super.getChunkAt(x, z);
+        }
     }
 }

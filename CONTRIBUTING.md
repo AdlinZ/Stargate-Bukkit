@@ -3,12 +3,13 @@ They represent what we consider to be good programming practices, and are not ne
 
 ## Submitting your code.
 
-Please work in a fork of the repository!<br><br>
-All changes should be made in a branch called `feature:#` or `fix:#` (with # being
-the [issue](https://github.com/the-lockedcraft-legacy-organization/Stargate-Bukkit/issues) your changes are correlated
-to).<br>
-Once you have tested your change, please make a pull
-request [here](https://github.com/the-lockedcraft-legacy-organization/Stargate-Bukkit/pulls).
+Please work in a feature branch or your own fork. Use branch names such as
+`fix-390` or `feature-123` (Git does not allow colons in branch names).
+Report problems in [this fork's issues](https://github.com/AdlinZ/Stargate-Bukkit/issues)
+and open pull requests against [this fork's `nightly` branch](https://github.com/AdlinZ/Stargate-Bukkit/pulls).
+Follow the build and validation instructions in [MAINTENANCE.md](MAINTENANCE.md).
+Include regression coverage for behavior changes and identify any real-server
+checks that have not yet been performed.
 
 ## Code Style
 
@@ -50,4 +51,3 @@ Please divide your code into methods for calculations and methods for side effec
 > Mashing your head against a wall to find a solution generally results in poor implementations.
 
 If you hit a block, please look around for an answer; it will help everyone in the long term.
-

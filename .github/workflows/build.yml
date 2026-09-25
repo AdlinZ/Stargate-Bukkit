@@ -1,0 +1,64 @@
+name: Build and test
+
+on:
+  push:
+    branches: [nightly, 'fix-*', 'maintenance-*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: Stargate
+          MYSQL_ROOT_PASSWORD: stargate-test
+          MYSQL_ROOT_HOST: '%'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pstargate-test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-java@v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Configure disposable integration database
+        run: |
+          cat > src/test/resources/mysql_credentials.secret <<'EOF'
+          MYSQL_DB_ADDRESS=127.0.0.1
+          MYSQL_DB_PORT=3306
+          MYSQL_DB_NAME=Stargate
+          MYSQL_DB_USER=root
+          MYSQL_DB_PASSWORD=stargate-test
+          EOF
+      - name: Build and run all tests
+        run: mvn -B -ntp verify
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: test-reports
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+      - name: Upload development JAR
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: stargate-development-${{ github.sha }}
+          path: target/Stargate-*.jar
+          if-no-files-found: error
