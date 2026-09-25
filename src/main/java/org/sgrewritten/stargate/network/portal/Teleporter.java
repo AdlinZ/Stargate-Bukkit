@@ -228,10 +228,8 @@ public class Teleporter {
             return;
         }
 
-        // To smooth the experienced for highly used portals, or entity teleportation
-        if (!exit.getChunk().isLoaded()) {
-            exit.getChunk().load();
-        }
+        // Let the teleport API load the destination. Even getChunk() can synchronously
+        // load a remote chunk, which is not allowed from the source region on Folia.
 
         Stargate.log(Level.FINEST, "Trying to teleport surrounding leashed entities");
         teleportNearbyLeashedEntities(target, exit, rotation);
