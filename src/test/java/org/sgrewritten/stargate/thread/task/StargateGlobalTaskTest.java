@@ -19,6 +19,7 @@ class StargateGlobalTaskTest {
 
     @AfterEach
     void tearDown() {
+        StargateTask.cancelScheduledTasks();
         MockBukkit.unmock();
     }
 

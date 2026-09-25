@@ -15,6 +15,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.sgrewritten.stargate.api.config.ConfigurationOption;
 import org.sgrewritten.stargate.api.gate.ImplicitGateBuilder;
+import org.sgrewritten.stargate.api.gate.GateStructureType;
 import org.sgrewritten.stargate.api.network.Network;
 import org.sgrewritten.stargate.api.network.PortalBuilder;
 import org.sgrewritten.stargate.api.network.portal.RealPortal;
@@ -29,11 +30,15 @@ import org.sgrewritten.stargate.exception.TranslatableException;
 import org.sgrewritten.stargate.network.NetworkType;
 import org.sgrewritten.stargate.network.StorageType;
 import org.sgrewritten.stargate.network.portal.PortalBlockGenerator;
+import org.sgrewritten.stargate.thread.task.StargateGlobalTask;
+import org.sgrewritten.stargate.thread.task.StargateQueuedAsyncTask;
+import org.sgrewritten.stargate.util.StargateTestHelper;
 
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Level;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -63,6 +68,36 @@ class StargateTest {
 
         Network network = plugin.getNetworkManager().createNetwork("network", NetworkType.CUSTOM, StorageType.LOCAL, false);
         portal = new PortalBuilder(plugin, player, PORTAL1).setGateBuilder(new ImplicitGateBuilder(signBlock1.getLocation(), plugin.getRegistry())).setNetwork(network).build();
+    }
+
+    @Test
+    void disableCancelsWorldTasksAndDrainsAcceptedWrites() {
+        AtomicInteger writes = new AtomicInteger();
+        StargateGlobalTask delayed =
+                new StargateGlobalTask() {
+                    @Override public void run() { Assertions.fail("Disabled world task executed"); }
+                };
+        delayed.runDelayed(100);
+        new StargateQueuedAsyncTask() {
+            @Override public void run() { writes.incrementAndGet(); }
+        }.runNow();
+        server.getPluginManager().disablePlugin(plugin);
+        Assertions.assertFalse(plugin.isEnabled());
+        Assertions.assertEquals(1, writes.get());
+        delayed.runNow();
+        scheduler.performTicks(101);
+    }
+
+    @Test
+    void loadingPortalsClearsIrisLeftOpenByPreviousShutdown() {
+        StargateTestHelper.runAllTasks();
+        Block iris = portal.getGate().getLocations(GateStructureType.IRIS)
+                .getFirst().getLocation().getBlock();
+        iris.setType(portal.getGate().getFormat().getIrisMaterial(true));
+        Assertions.assertFalse(portal.isOpen());
+        plugin.reload();
+        StargateTestHelper.runAllTasks();
+        Assertions.assertEquals(portal.getGate().getFormat().getIrisMaterial(false), iris.getType());
     }
 
     @Test

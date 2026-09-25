@@ -9,6 +9,8 @@ import org.junit.jupiter.api.extension.ParameterResolutionException;
 import org.sgrewritten.stargate.api.gate.GateFormatRegistry;
 import org.sgrewritten.stargate.gate.GateFormatHandler;
 import org.sgrewritten.stargate.thread.task.StargateQueuedAsyncTask;
+import org.sgrewritten.stargate.thread.task.StargateTask;
+import org.sgrewritten.stargate.thread.task.StargateRegionTask;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -67,6 +69,8 @@ public class StargateExtension extends MockBukkitExtension {
         if (!hadPluginField) {
             StargateQueuedAsyncTask.disableAsyncQueue(id);
         }
+        StargateTask.cancelScheduledTasks();
+        StargateRegionTask.clearPopulator();
         super.afterEach(context);
     }
 
@@ -85,6 +89,7 @@ public class StargateExtension extends MockBukkitExtension {
     @Override
     public Object resolveParameter(ParameterContext parameterContext, ExtensionContext extensionContext) throws ParameterResolutionException {
         if (isStargatePluginParameter(parameterContext, extensionContext)) {
+            StargateQueuedAsyncTask.disableAsyncQueue(id);
             return MockBukkit.load(Stargate.class);
         }
         return super.resolveParameter(parameterContext, extensionContext);

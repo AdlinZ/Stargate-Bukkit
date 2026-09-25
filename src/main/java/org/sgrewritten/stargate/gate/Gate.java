@@ -290,10 +290,10 @@ public class Gate implements GateAPI {
         }
 
         for (BlockLocation blockLocation : locations) {
-            Block block = blockLocation.getLocation().getBlock();
-            new StargateRegionTask(block.getLocation()) {
+            new StargateRegionTask(blockLocation.getLocation()) {
                 @Override
                 public void run() {
+                    Block block = blockLocation.getLocation().getBlock();
                     block.setBlockData(blockData);
                     if (material == Material.END_GATEWAY) {// force a location to prevent exit gateway generation
                         EndGateway gateway = (EndGateway) block.getState();

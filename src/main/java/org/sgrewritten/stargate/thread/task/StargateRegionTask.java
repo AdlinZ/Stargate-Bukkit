@@ -19,7 +19,12 @@ public abstract class StargateRegionTask extends StargateTask {
     private final boolean bungee;
 
     protected StargateRegionTask(Location location, boolean bungee) {
-        this.location = location;
+        this(location, bungee, USING_FOLIA);
+    }
+
+    StargateRegionTask(Location location, boolean bungee, boolean usingFolia) {
+        super(usingFolia);
+        this.location = location.clone();
         this.plugin = Stargate.getInstance();
         this.bungee = bungee;
     }
@@ -30,7 +35,10 @@ public abstract class StargateRegionTask extends StargateTask {
 
     @Override
     public void runNow() {
-        if (USING_FOLIA) {
+        if (!canSchedule()) {
+            return;
+        }
+        if (usingFolia) {
             ScheduledTask theTask = Bukkit.getServer().getRegionScheduler().run(plugin, location, super::runTask);
             super.registerFoliaTask(theTask);
         } else {
@@ -40,26 +48,35 @@ public abstract class StargateRegionTask extends StargateTask {
 
     @Override
     public void runDelayed(long delay) {
-        if (USING_FOLIA) {
-            ScheduledTask theTask = Bukkit.getServer().getRegionScheduler().runDelayed(plugin, location, super::runTask, delay);
+        if (!canSchedule()) {
+            return;
+        }
+        if (usingFolia) {
+            ScheduledTask theTask = Bukkit.getServer().getRegionScheduler().runDelayed(plugin, location, super::runTask, Math.max(1, delay));
             super.registerFoliaTask(theTask);
         } else {
-            super.registerBukkitTask(new StargateBukkitRunnable(this::runPopulatorTask)).runTaskLater(plugin, delay);
+            super.registerBukkitTask(new StargateBukkitRunnable(this::runPopulatorTask).runTaskLater(plugin, delay));
         }
     }
 
     @Override
     public void runTaskTimer(long period, long delay) {
+        if (!canSchedule()) {
+            return;
+        }
         super.setRepeatable(true);
-        if (USING_FOLIA) {
-            ScheduledTask theTask = Bukkit.getServer().getRegionScheduler().runAtFixedRate(plugin, location, super::runTask, delay, period);
+        if (usingFolia) {
+            ScheduledTask theTask = Bukkit.getServer().getRegionScheduler().runAtFixedRate(plugin, location, super::runTask, Math.max(1, delay), period);
             super.registerFoliaTask(theTask);
         } else {
-            super.registerBukkitTask(new StargateBukkitRunnable(this::runPopulatorTask)).runTaskTimer(plugin, delay, period);
+            super.registerBukkitTask(new StargateBukkitRunnable(this::runPopulatorTask).runTaskTimer(plugin, delay, period));
         }
     }
 
     private void runPopulatorTask() {
+        if (!canSchedule()) {
+            return;
+        }
         populator.addAction(super::runTask, bungee);
         super.registerTask();
     }

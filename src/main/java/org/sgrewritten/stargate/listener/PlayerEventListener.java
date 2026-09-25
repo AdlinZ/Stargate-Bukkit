@@ -229,7 +229,7 @@ public class PlayerEventListener implements Listener {
                 }
                 this.cancel();
             }
-        }.runTaskTimer(0, 20);
+        }.runTaskTimer(20, 1);
 
 
         //Update the server name in the database once it's known

@@ -4,7 +4,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 import org.sgrewritten.stargate.Stargate;
 
-import java.util.LinkedList;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Queue;
 import java.util.logging.Level;
 
@@ -19,8 +19,8 @@ import java.util.logging.Level;
  */
 public class SynchronousPopulator implements Runnable {
     private boolean queueOverflowHasBeenAchieved = false;
-    private final Queue<Runnable> populatorQueue = new LinkedList<>();
-    private final Queue<Runnable> bungeePopulatorQueue = new LinkedList<>();
+    private final Queue<Runnable> populatorQueue = new ConcurrentLinkedQueue<>();
+    private final Queue<Runnable> bungeePopulatorQueue = new ConcurrentLinkedQueue<>();
 
     @Override
     public void run() {

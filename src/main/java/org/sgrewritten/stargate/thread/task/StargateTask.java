@@ -1,142 +1,158 @@
 package org.sgrewritten.stargate.thread.task;
 
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
-import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.Bukkit;
+import org.bukkit.scheduler.BukkitTask;
 import org.sgrewritten.stargate.Stargate;
 import org.sgrewritten.stargate.property.NonLegacyClass;
 
-import java.util.LinkedList;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public abstract class StargateTask implements Runnable {
     protected static final boolean USING_FOLIA = NonLegacyClass.REGIONIZED_SERVER.isImplemented();
-    private static final int MAXIMUM_SHUTDOWN_CYCLES = 10;
-    private boolean taskIsRegistered = false;
-    private volatile boolean cancelled = false;
-    private volatile boolean running = false;
-    private ScheduledTask scheduledTask;
-    private BukkitRunnable scheduledBukkitTask;
-    private static final Queue<Runnable> tasks = new ConcurrentLinkedQueue<>();
-    private boolean repeatable = false;
+    private static final Set<StargateTask> tasks = ConcurrentHashMap.newKeySet();
+    protected final boolean usingFolia;
 
+    protected StargateTask() {
+        this(USING_FOLIA);
+    }
+
+    StargateTask(boolean usingFolia) {
+        this.usingFolia = usingFolia;
+    }
+
+    private final Stargate owner = Stargate.getInstance();
+    private final List<Runnable> cancellations = new ArrayList<>();
+    private boolean cancelled;
+    private boolean running;
+    private boolean completed;
+    private boolean repeatable;
+
+    /** All delays and periods exposed by these wrappers are measured in ticks. */
     public abstract void runDelayed(long delay);
-
     public abstract void runNow();
-
     public abstract void runTaskTimer(long period, long delay);
 
-
-    /**
-     * Cancel this task
-     */
-    public void cancel() {
-        this.cancelled = true;
-        cancelIfTaskHasBeenScheduled(!USING_FOLIA);
+    public synchronized void cancel() {
+        cancelled = true;
+        cancellations.forEach(Runnable::run);
+        cancellations.clear();
+        tasks.remove(this);
     }
 
-    /**
-     * Register the task to all tasks that are currently run
-     */
-    protected void registerTask() {
-        if (taskIsRegistered) {
-            return;
+    protected synchronized boolean canSchedule() {
+        if (owner != null && !owner.isEnabled()) {
+            cancel();
         }
-        taskIsRegistered = true;
-        tasks.add(this);
+        return !cancelled && !completed;
     }
 
-    /**
-     * Register a Folia task
-     * @param scheduledTask <p>The id of the task</p>
-     */
-    protected void registerFoliaTask(ScheduledTask scheduledTask) {
-        this.scheduledTask = scheduledTask;
-        if (cancelled) {
-            cancelIfTaskHasBeenScheduled(false);
+    protected synchronized void registerTask() {
+        if (!cancelled && !completed) {
+            tasks.add(this);
+        }
+    }
+
+    protected synchronized void registerCancellation(Runnable cancellation) {
+        if (owner != null && !owner.isEnabled()) {
+            cancel();
+        }
+        if (cancelled || completed) {
+            cancellation.run();
         } else {
+            cancellations.add(cancellation);
             registerTask();
         }
     }
 
-    /**
-     * Register a bukkit task
-     * @param scheduledBukkitTask <p>The ID of the task</p>
-     * @return <p>A bukkit runnable</p>
-     */
-    protected BukkitRunnable registerBukkitTask(BukkitRunnable scheduledBukkitTask) {
-        this.scheduledBukkitTask = scheduledBukkitTask;
-        if (!cancelled) {
-            registerTask();
+    protected void registerFoliaTask(ScheduledTask task) {
+        if (task == null) {
+            // Entity schedulers return null when the entity has already retired.
+            cancel();
+        } else {
+            registerCancellation(task::cancel);
         }
-        return scheduledBukkitTask;
+    }
+
+    protected void registerBukkitTask(BukkitTask task) {
+        registerCancellation(task::cancel);
+    }
+
+    /** Cancel scheduled world work without discarding accepted database work. */
+    public static void cancelScheduledTasks() {
+        for (StargateTask task : List.copyOf(tasks)) {
+            if (!(task instanceof StargateQueuedAsyncTask)) {
+                task.cancel();
+            }
+        }
+    }
+
+    static void cancelQueuedTasks() {
+        for (StargateTask task : List.copyOf(tasks)) {
+            if (task instanceof StargateQueuedAsyncTask) {
+                task.cancel();
+            }
+        }
     }
 
     /**
-     * Cancel this task if it has been scheduled
-     * @param bukkit <p>Whether it's a bukkit or Folia task</p>
+     * Legacy test utility. Never use to flush work during shutdown: Folia tasks
+     * must execute on their owning scheduler, and database work on its queue.
      */
-    private void cancelIfTaskHasBeenScheduled(boolean bukkit) {
-        if (bukkit) {
-            scheduledBukkitTask.cancel();
-        } else if (scheduledTask != null) {
-            scheduledTask.cancel();
-        }
-        tasks.remove(this);
-    }
-
-    /**
-     * Runs all tasks
-     */
+    @Deprecated
     public static void forceRunAllTasks() {
-        int counter = 0;
-        while (!tasks.isEmpty() && counter < MAXIMUM_SHUTDOWN_CYCLES) {
-            Queue<Runnable> scheduledTasks = new LinkedList<>(tasks);
-            scheduledTasks.forEach(task -> {
-                try {
-                    task.run();
-                } catch (Exception e) {
-                    Stargate.log(e);
-                }
-            });
-            tasks.removeAll(scheduledTasks);
-            counter++;
+        if (USING_FOLIA || !Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("Cannot force tasks outside the Paper main thread");
+        }
+        Set<StargateTask> visited = new HashSet<>();
+        for (int cycle = 0; cycle < 10; cycle++) {
+            List<StargateTask> pending = tasks.stream()
+                    .filter(task -> !(task instanceof StargateQueuedAsyncTask) && visited.add(task)).toList();
+            if (pending.isEmpty()) {
+                return;
+            }
+            for (StargateTask task : pending) {
+                task.runTask();
+            }
         }
     }
 
-    /**
-     * Run the task if not already been running (should be threadsafe)
-     */
     protected void runTask() {
-        if (cancelled) {
-            cancelIfTaskHasBeenScheduled(true);
-            return;
-        }
-        if (running && !repeatable) {
-            return;
-        }
-        running = true;
-        tasks.remove(this);
-        this.run();
+        runTask(this);
     }
 
-    /**
-     * Convenience method, does same as {@link StargateTask#runTask()}
-     *
-     * @param scheduledTask
-     */
-    protected void runTask(ScheduledTask scheduledTask) {
-        if (this.scheduledTask == null) {
-            this.scheduledTask = scheduledTask;
+    protected void runTask(Runnable action) {
+        synchronized (this) {
+            if (cancelled || completed || running) {
+                return;
+            }
+            running = true;
+            completed = !repeatable;
         }
-        this.runTask();
+        try {
+            action.run();
+        } catch (RuntimeException | Error failure) {
+            cancel();
+            throw failure;
+        } finally {
+            synchronized (this) {
+                running = false;
+                if (completed) {
+                    cancel();
+                }
+            }
+        }
     }
 
-    /**
-     * Should the task repeat itself?
-     * @param repeatable <p>Change the task to repeat it self, or to stop repeating itself</p>
-     */
-    protected void setRepeatable(boolean repeatable) {
+    protected void runTask(ScheduledTask task) {
+        runTask();
+    }
+
+    protected synchronized void setRepeatable(boolean repeatable) {
         this.repeatable = repeatable;
     }
 }
