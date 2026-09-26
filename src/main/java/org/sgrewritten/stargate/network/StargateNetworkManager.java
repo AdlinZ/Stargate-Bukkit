@@ -251,35 +251,17 @@ public class StargateNetworkManager implements NetworkManager {
 
     @Override
     public void savePortal(RealPortal portal, Network network) throws NameConflictException {
-        if (network.isPortalNameTaken(portal.getName())) {
-            throw new NameConflictException("Portal already exists in network " + network.getId());
-        }
-        if (portal.getStorageType() == StorageType.INTER_SERVER) {
-            // The shared DB's unique key arbitrates even when proxy announcements are delayed.
-            // The synchronous API must not report success before this reservation commits.
-            try {
-                if (!storageAPI.savePortalToStorage(portal)) {
-                    throw new IllegalStateException("Shared storage did not save the portal");
+        network.addPortal(portal);
+        new StargateQueuedAsyncTask() {
+            @Override
+            public void run() {
+                try {
+                    storageAPI.savePortalToStorage(portal);
+                } catch (StorageWriteException e) {
+                    Stargate.log(e);
                 }
-            } catch (org.sgrewritten.stargate.exception.database.PortalStorageConflictException e) {
-                throw new NameConflictException("Portal already exists on another server in network " + network.getId());
-            } catch (StorageWriteException e) {
-                throw new IllegalStateException("Could not save inter-server portal", e);
             }
-            network.addPortal(portal);
-        } else {
-            network.addPortal(portal);
-            new StargateQueuedAsyncTask() {
-                @Override
-                public void run() {
-                    try {
-                        storageAPI.savePortalToStorage(portal);
-                    } catch (StorageWriteException e) {
-                        Stargate.log(e);
-                    }
-                }
-            }.runNow();
-        }
+        }.runNow();
         network.getPluginMessageSender().sendCreatePortal(portal);
         network.updatePortals();
     }

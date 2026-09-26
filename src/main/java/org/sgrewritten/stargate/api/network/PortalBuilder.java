@@ -281,18 +281,11 @@ public class PortalBuilder {
             permissionAndEventHandling(portal, network);
 
             flagChecks(flags);
+            economyCheck(portal);
             finalChecks(portal, network);
-            boolean charged = economyCheck(portal);
             getLocationsAdjacentToPortal(gateAPI).forEach(position -> stargateAPI.getMaterialHandlerResolver().registerPlacement(stargateAPI.getRegistry(), position, List.of(portal), position.getBlock().getType(), eventTarget));
             //Save the portal and inform the user
-            try {
-                stargateAPI.getNetworkManager().savePortal(portal, network);
-            } catch (NameConflictException | RuntimeException e) {
-                if (charged && !stargateAPI.getEconomyManager().refundPlayer(economyTarget, null, cost)) {
-                    Stargate.log(java.util.logging.Level.WARNING, "Unable to refund failed portal creation for " + economyTarget.getName());
-                }
-                throw e;
-            }
+            stargateAPI.getNetworkManager().savePortal(portal, network);
             gateAPI.getPortalPositions().stream().filter(portalPosition -> portalPosition.getPositionType() == PositionType.SIGN)
                     .forEach(portalPosition -> portal.setSignColor(ColorRegistry.DEFAULT_DYE_COLOR, portalPosition));
             Stargate.log(Level.FINE, "Successfully created a new portal");
@@ -359,16 +352,14 @@ public class PortalBuilder {
         }
     }
 
-    private boolean economyCheck(RealPortal portal) throws LocalisedMessageException {
-        if (economyTarget == null || !EconomyHelper.shouldChargePlayer(economyTarget, portal, BypassPermission.COST_CREATE)) {
-            return false;
-        }
-        if (!stargateAPI.getEconomyManager().chargePlayer(economyTarget, null, cost)) {
+    private void economyCheck(RealPortal portal) throws LocalisedMessageException {
+        //Charge the player as necessary for the portal creation
+        if (economyTarget != null && EconomyHelper.shouldChargePlayer(economyTarget, portal, BypassPermission.COST_CREATE) &&
+                !stargateAPI.getEconomyManager().chargePlayer(economyTarget, null, cost)) {
             String message = stargateAPI.getLanguageManager().getErrorMessage(TranslatableMessage.LACKING_FUNDS);
             MessageUtils.sendMessageFromPortal(portal, economyTarget, message, MessageType.DENY);
             throw new LocalisedMessageException(message, portal, MessageType.DENY);
         }
-        return true;
     }
 
 

@@ -369,7 +369,7 @@ public class SQLQueryGenerator {
 
         PreparedStatement removeFlagsStatement = prepareQuery(connection, stringStatement);
         removeFlagsStatement.setString(1, portal.getName());
-        removeFlagsStatement.setString(2, portal.getNetwork().getId());
+        removeFlagsStatement.setString(2, portal.getNetwork().getName());
         removeFlagsStatement.setString(3, String.valueOf(flagChar));
         return removeFlagsStatement;
     }
@@ -732,18 +732,6 @@ public class SQLQueryGenerator {
             statement.setString(2, Stargate.getServerUUID());
         }
         statement.setString(1, world.getUID().toString());
-        return statement;
-    }
-
-    public PreparedStatement generatePortalUpdate(Connection connection, Portal portal, String value, boolean move)
-            throws SQLException {
-        SQLQuery query = move
-                ? (portal.getStorageType() == StorageType.LOCAL ? SQLQuery.MOVE_PORTAL_NETWORK : SQLQuery.MOVE_INTER_PORTAL_NETWORK)
-                : (portal.getStorageType() == StorageType.LOCAL ? SQLQuery.UPDATE_PORTAL_OWNER : SQLQuery.UPDATE_INTER_PORTAL_OWNER);
-        PreparedStatement statement = prepareQuery(connection, getQuery(query));
-        statement.setString(1, value);
-        statement.setString(2, portal.getName());
-        statement.setString(3, portal.getNetwork().getId());
         return statement;
     }
 }

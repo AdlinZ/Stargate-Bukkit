@@ -87,48 +87,46 @@ async execution, cancellation/retirement/late callbacks, Bungee poll completion,
 serial queued timers, barriers, timeout/restart handling, actual MockBukkit plugin
 disable, and persisted iris reconciliation. These are not real Folia region tests.
 
-## Fourth maintenance batch: migration and loaded controls
+## Storage compatibility revision
 
-[Upstream #379](https://github.com/stargate-rewritten/Stargate-Bukkit/issues/379):
-legacy custom networks whose normalized name is `<@default@>` now migrate to
-`:<@default@>`, with a warning showing the mapping. The colon is the legacy field
-delimiter, so another valid legacy network cannot already use that name. This
-keeps the custom network separate from the actual default network, even when both
-contain a portal with the same name or import in the opposite order. A legacy
-configuration that intentionally uses `<@default@>` as its default network still
-loads as the default. This prevents new faulty imports; it does not rewrite
-already-migrated SQL databases or reconstruct portals lost in an earlier import.
+The storage extensions shipped in `v1.0.0.19-maintenance.1` have been withdrawn
+at the fork owner's request. SQL resources, SQL generation, storage interfaces,
+legacy conversion, portal setters, creation and persistence now match upstream
+`nightly` at `d76cdd9c4dd059f83c750797d50523dac5a95f08`.
 
-[Upstream #377](https://github.com/stargate-rewritten/Stargate-Bukkit/issues/377):
-loading a core-managed portal restores missing control records. An existing wall
-sign can regain its missing record; a non-always-on portal can regain a button
-at a free control location. Restored positions are registered, rendered and saved
-through the serial database queue. Repeated loads do not duplicate those records.
-Always-on portals do not gain a button. Registered add-on flags and positions
-owned by enabled plugins keep their add-on-controlled layout.
+This removes owner/network setter persistence, synchronous shared-portal
+reservation and its creation-refund handling, automatic missing-control recovery
+and its stored positions, and the reserved legacy network remapping. Consequently,
+#377, #379, the persistence portion of #244 and the shared-storage conflict portion
+of #367 are no longer claimed fixed. Existing storage functionality remains: normal
+portal creation/deletion, flags, metadata and the upstream migration/validity rules
+can still write data. This is not a read-only plugin.
 
-Recovery does not replace unrelated occupied blocks, claim another portal's
-controls/frame/iris, or overwrite positions stored for an absent add-on. If there
-is no existing sign or safe button location, the portal is not registered for
-that load and a warning explains why. Its database record is retained so restoring
-the sign, clearing the obstruction or reinstalling the add-on can recover it.
-Missing-control checks run before the configured invalid-structure deletion path.
-No new sign is fabricated and no failed control repair deletes stored portal data.
-The existing validity policy still applies to other invalid gate structures.
+The serial queue, cancellation and bounded shutdown/reload barriers remain so
+already-accepted normal saves are not dropped or raced by reload. These change
+execution timing, not SQL, schemas or the data requested for storage. The sole
+remaining `SQLDatabase` change closes portal iris blocks on their owning region
+after loading; it does not write database records.
 
-Regression tests cover legacy name normalization, configured defaults, import
-order and duplicate portal names with SQLite persistence; missing-control
-recovery, add-on ownership/flags, occupied positions and always-on gates; and
-plugin reloads that verify rendered buttons, database rows and recovery after an
-obstruction is removed. Real-server testing with StargateMechanics and Folia is
-still required. Cross-server duplicate messaging (#305/#313) is a separate batch.
+No database rollback, cleanup or reverse migration is performed on installation.
+Data already written by an earlier maintenance build remains as stored. Restore
+an appropriate backup separately if such earlier changes need to be undone.
 
-## Fifth maintenance batch: remaining confirmed defects
+Validation of this revision: JDK 21 full Maven verify with disposable MySQL 8.4
+and SQLite passed **691 tests: 689 passed, 2 existing skips**. Five compatibility
+cases check that setters leave stored schema/rows unchanged, both storage types
+still queue ordinary creation, and reload does not add missing controls.
+The lower count removes tests for the withdrawn features; it does not skip them.
 
-This batch covers upstream #305/#313, #375, the owner/network persistence portion
-of #244, and the duplicate shared-storage creation path from #367. It also hardens
-U-gate arrival handling relevant to #364; the original Velocity configuration and
-real proxy/server combination have not been reproduced.
+On Folia 26.1.2-8 / Java 25.0.4.1, the revised JAR passed all six cold-destination
+routes, five vehicle/leash cases and three cross-world/arrival cases with a
+leashed cow. All checks use non-player entities on a localhost server copy.
+
+## Retained proxy and entity fixes
+
+These fixes cover upstream #305/#313 and #375, and harden U-gate arrival handling
+relevant to #364. The original Velocity configuration and real proxy/server
+combination have not been reproduced.
 
 - Proxy forwards use one online carrier instead of broadcasting through every
   player. Replayed remote announcements are idempotent, metadata can refresh, and
@@ -154,34 +152,11 @@ real proxy/server combination have not been reproduced.
   bookkeeping. This is covered with simulated futures/schedulers, not real Folia.
 - No safe arrival location now produces a localized message, clears boat markers
   and refunds an accepted local charge instead of dereferencing a null destination.
-- Saved core owner/network edits write storage before changing memory. Moves cascade
-  flags/positions atomically and update both network registries; network-type flags
-  are changed transactionally. Failed writes preserve the old owner/network.
-  Initial saves synchronize with these edits. Moving between local and inter-server
-  storage, or changing saved U routes with `setNetwork`, is explicitly rejected;
-  these require a separate migration API. Custom storage adapters must implement the
-  new default mutation methods to support editing saved core portals.
-- Shared gate creation commits its SQL transaction before registration, announcement
-  or a success response. A duplicate key becomes a normal name conflict. Database
-  failures leave the new gate unregistered and the builder refunds creation charges.
-  The shared database remains the authority even with stale registries on two servers.
-
 Reload now waits for accepted database writes before replacing storage or clearing
 registries. The first push CI exposed a real race in which a newly created U gate
 could disappear from the reloaded registry while its queued INSERT finished later.
 A slow-write regression fails with the original reload order and passes with the
 barrier. Timeout/interruption leaves the current registry intact and logs the failure.
-
-**Latency tradeoff:** the current portal-building/setter API is synchronous. Shared
-creation and saved owner/network edits now wait for SQL confirmation; slow/unavailable
-MySQL can delay that caller's server/region tick. Normal local creation retains its
-queued write. An asynchronous creation API is a separate follow-up.
-
-Validation: JDK 21 full `mvn verify`, disposable MySQL 8.4 and SQLite, **723 tests:
-721 passed, 2 existing furnace-minecart skips**. Includes 40 explicitly added regression
-cases, plus existing parameterized cases expanded by the new translation key. Disabling
-persistence, shared reservation and non-living leash support makes their regressions fail.
-Restoring the original broadcaster sends three packets for three players instead of one.
 
 For #364, BungeeBark's upstream instructions require disabling Velocity's native
 `bungee-plugin-message-channel` when BungeeBark handles that channel. Its Forward
@@ -262,7 +237,9 @@ and entity width, absent floor, load failure, and build-height boundaries. Full
 JDK 21 Maven verification with SQLite and MySQL: **730 tests, 728 passed, 2 existing
 skips**. Human sign/button interaction, concurrent-player load, a broad version
 matrix, proxy end-to-end delivery, and failure/refund/shutdown races remain
-outside this real-server validation. No release or upstream comment was made.
+outside this real-server validation. These results describe the previous
+`be649c10` build, published as `v1.0.0.19-maintenance.1`; they are not a new
+verification of the storage compatibility revision. No upstream comment was made.
 
 ## Build and test
 
@@ -310,7 +287,7 @@ Java version, plugin commit and logs for each check:
    minecarts separately. These involve additional paths outside the initial fix.
 5. Repeat the ordinary player and vehicle cases on Paper to check compatibility.
 6. Stop with open portals and pending saves, then restart and inspect iris blocks,
-   always-on destinations and saved portal edits. Test Bungee discovery with no
+   always-on destinations and ordinary saved portals. Test Bungee discovery with no
    players initially online, then join and verify the polling task terminates.
 
 ## Follow-up work

@@ -19,8 +19,6 @@ import org.sgrewritten.stargate.api.gate.GateStructureType;
 import org.sgrewritten.stargate.api.gate.ImplicitGateBuilder;
 import org.sgrewritten.stargate.api.network.Network;
 import org.sgrewritten.stargate.api.network.PortalBuilder;
-import org.sgrewritten.stargate.api.network.portal.PortalPosition;
-import org.sgrewritten.stargate.api.network.portal.PositionType;
 import org.sgrewritten.stargate.api.network.portal.RealPortal;
 import org.sgrewritten.stargate.api.network.portal.flag.StargateFlag;
 import org.sgrewritten.stargate.config.ConfigurationHelper;
@@ -35,9 +33,7 @@ import org.sgrewritten.stargate.network.StorageType;
 import org.sgrewritten.stargate.network.portal.PortalBlockGenerator;
 import org.sgrewritten.stargate.thread.task.StargateGlobalTask;
 import org.sgrewritten.stargate.thread.task.StargateQueuedAsyncTask;
-import org.sgrewritten.stargate.util.ButtonHelper;
 import org.sgrewritten.stargate.util.StargateTestHelper;
-import org.sgrewritten.stargate.util.database.DatabaseHelper;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -142,23 +138,6 @@ class StargateTest {
     }
 
     @Test
-    void ownerAndNetworkChangesSurvivePluginReload() throws Exception {
-        StargateTestHelper.runAllTasks();
-        UUID owner = UUID.randomUUID();
-        Network target = plugin.getNetworkManager().createNetwork("moved", NetworkType.CUSTOM, StorageType.LOCAL, false);
-        portal.setOwner(owner);
-        portal.setNetwork(target);
-        plugin.reload();
-        StargateTestHelper.runAllTasks();
-        RealPortal loaded = (RealPortal) plugin.getRegistry().getNetwork("moved", StorageType.LOCAL).getPortal(PORTAL1);
-        assertNotNull(loaded);
-        Assertions.assertEquals(owner, loaded.getOwnerUUID());
-        Network old = plugin.getRegistry().getNetwork("network", StorageType.LOCAL);
-        Assertions.assertTrue(old == null || old.getPortal(PORTAL1) == null);
-        Assertions.assertFalse(loaded.getGate().getPortalPositions().isEmpty());
-    }
-
-    @Test
     void disableCancelsWorldTasksAndDrainsAcceptedWrites() {
         AtomicInteger writes = new AtomicInteger();
         StargateGlobalTask delayed =
@@ -189,58 +168,32 @@ class StargateTest {
     }
 
     @Test
-    void reloadRestoresAndPersistsMissingButton() throws Exception {
+    void reloadDoesNotAddMissingControlsToExistingData() throws Exception {
         StargateTestHelper.runAllTasks();
-        // The fixture uses the same stored shape as an E gate after removing its
-        // add-on: a normal non-always-on portal with a sign and no button record.
-        Assertions.assertFalse(portal.hasFlag(StargateFlag.ALWAYS_ON));
-        Assertions.assertTrue(portal.getGate().getPortalPositions().stream()
-                .noneMatch(position -> position.getPositionType() == PositionType.BUTTON));
+        int originalPositions = portal.getGate().getPortalPositions().size();
+        Assertions.assertTrue(portal.getGate().getPortalPositions().stream().noneMatch(position ->
+                position.getPositionType() == org.sgrewritten.stargate.api.network.portal.PositionType.BUTTON));
+        var database = org.sgrewritten.stargate.util.database.DatabaseHelper.loadDatabase(plugin);
+        String table = org.sgrewritten.stargate.util.database.DatabaseHelper
+                .getTableNameConfiguration(false).getPortalPositionTableName();
         for (int reload = 0; reload < 2; reload++) {
             plugin.reload();
             StargateTestHelper.runAllTasks();
-            StargateQueuedAsyncTask.waitForEmptyQueue();
             RealPortal loaded = (RealPortal) plugin.getRegistry().getNetwork("network", StorageType.LOCAL).getPortal(PORTAL1);
             assertNotNull(loaded);
-            Assertions.assertEquals(1, loaded.getGate().getPortalPositions().stream()
-                    .filter(position -> position.getPositionType() == PositionType.BUTTON).count());
-            PortalPosition button = loaded.getGate().getPortalPositions().stream()
-                    .filter(position -> position.getPositionType() == PositionType.BUTTON).findFirst().orElseThrow();
-            Block buttonBlock = loaded.getGate().getLocation(button.getRelativePositionLocation()).getBlock();
-            Assertions.assertTrue(ButtonHelper.isButton(buttonBlock.getType()));
-            Assertions.assertSame(loaded, plugin.getRegistry().getPortalPosition(buttonBlock.getLocation()).getPortal());
-            String table = DatabaseHelper.getTableNameConfiguration(false).getPortalPositionTableName();
-            try (var connection = DatabaseHelper.loadDatabase(plugin).getConnection();
+            Assertions.assertEquals(originalPositions, loaded.getGate().getPortalPositions().size());
+            Assertions.assertTrue(loaded.getGate().getPortalPositions().stream().noneMatch(position ->
+                    position.getPositionType() == org.sgrewritten.stargate.api.network.portal.PositionType.BUTTON));
+            try (var connection = database.getConnection();
                  var query = connection.prepareStatement("SELECT COUNT(*) FROM " + table + " WHERE portalName = ? AND networkName = ?")) {
                 query.setString(1, PORTAL1);
                 query.setString(2, "network");
                 try (var rows = query.executeQuery()) {
                     Assertions.assertTrue(rows.next());
-                    Assertions.assertEquals(2, rows.getInt(1), "One sign and one button must be stored, without duplicates");
+                    Assertions.assertEquals(originalPositions, rows.getInt(1));
                 }
             }
         }
-    }
-
-    @Test
-    void unsafeControlRepairKeepsStoredPortalForLaterRecovery() throws Exception {
-        StargateTestHelper.runAllTasks();
-        var signVector = portal.getGate().getPortalPositions().getFirst().getRelativePositionLocation();
-        var buttonVector = portal.getGate().getFormat().getControlBlocks().stream()
-                .filter(vector -> !vector.equals(signVector)).findFirst().orElseThrow();
-        Block occupied = portal.getGate().getLocation(buttonVector).getBlock();
-        occupied.setType(Material.DIAMOND_BLOCK);
-        plugin.reload();
-        StargateTestHelper.runAllTasks();
-        Assertions.assertNull(plugin.getRegistry().getNetwork("network", StorageType.LOCAL).getPortal(PORTAL1));
-        Assertions.assertEquals(Material.DIAMOND_BLOCK, occupied.getType());
-        // Removing the obstruction is enough to recover the same stored portal.
-        occupied.setType(Material.AIR);
-        plugin.reload();
-        StargateTestHelper.runAllTasks();
-        StargateQueuedAsyncTask.waitForEmptyQueue();
-        assertNotNull(plugin.getRegistry().getNetwork("network", StorageType.LOCAL).getPortal(PORTAL1));
-        Assertions.assertTrue(ButtonHelper.isButton(occupied.getType()));
     }
 
     @Test
