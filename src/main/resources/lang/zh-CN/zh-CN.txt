@@ -80,3 +80,4 @@ adminReload=配置文件已重载!
 adminInfo=正在运行版本 %version%. 更新记录: https://git.io/JD4Qo
 adminHelp=星门的WIKI可在 https://git.io/JDclf 上找到.
 translatedBy=YK_DZ
+tpDestBlocked=目标传送门附近没有安全的落脚位置。

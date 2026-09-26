@@ -166,4 +166,173 @@ class StargateBungeeManagerTest {
         Assertions.assertEquals(bungeePortal, pulledPortal);
     }
 
+
+    private String announcement(String name, String serverName, StargateProtocolRequestType type) {
+        com.google.gson.JsonObject json = new com.google.gson.JsonObject();
+        json.addProperty("REQUEST_TYPE", type.name());
+        json.addProperty("NETWORK", NETWORK2);
+        json.addProperty("PORTAL", name);
+        json.addProperty("SERVER", serverName);
+        json.addProperty("PORTAL_FLAG", realPortal.getAllFlagsString());
+        json.addProperty("OWNER", realPortal.getOwnerUUID().toString());
+        return json.toString();
+    }
+
+    @Test
+    void replayedAddKeepsExistingRemoteInstance() {
+        String message = announcement(PORTAL, "remote", StargateProtocolRequestType.PORTAL_ADD);
+        bungeeManager.updateNetwork(message);
+        Portal first = realPortal.getNetwork().getPortal(PORTAL);
+        bungeeManager.updateNetwork(message);
+        Assertions.assertSame(first, realPortal.getNetwork().getPortal(PORTAL));
+    }
+
+    @Test
+    void remoteDeleteCannotRemoveLocalOrOtherServerPortal() {
+        bungeeManager.updateNetwork(announcement(REGISTERED_PORTAL, "remote", StargateProtocolRequestType.PORTAL_REMOVE));
+        Assertions.assertSame(realPortal, realPortal.getNetwork().getPortal(REGISTERED_PORTAL));
+        bungeeManager.updateNetwork(announcement(PORTAL, "remote", StargateProtocolRequestType.PORTAL_ADD));
+        Portal first = realPortal.getNetwork().getPortal(PORTAL);
+        bungeeManager.updateNetwork(announcement(PORTAL, "other", StargateProtocolRequestType.PORTAL_REMOVE));
+        Assertions.assertSame(first, realPortal.getNetwork().getPortal(PORTAL));
+        bungeeManager.updateNetwork(announcement(PORTAL, "remote", StargateProtocolRequestType.PORTAL_REMOVE));
+        bungeeManager.updateNetwork(announcement(PORTAL, "remote", StargateProtocolRequestType.PORTAL_REMOVE));
+        Assertions.assertNull(realPortal.getNetwork().getPortal(PORTAL));
+    }
+
+    @Test
+    void ownAnnouncementsCannotReplaceRealPortal() {
+        bungeeManager.updateNetwork(announcement(REGISTERED_PORTAL, SERVER, StargateProtocolRequestType.PORTAL_ADD));
+        bungeeManager.updateNetwork(announcement(REGISTERED_PORTAL, SERVER, StargateProtocolRequestType.PORTAL_REMOVE));
+        Assertions.assertSame(realPortal, realPortal.getNetwork().getPortal(REGISTERED_PORTAL));
+    }
+
+    @Test
+    void conflictingRemoteAddDoesNotReplaceExistingPortal() {
+        bungeeManager.updateNetwork(announcement(PORTAL, "remote", StargateProtocolRequestType.PORTAL_ADD));
+        Portal first = realPortal.getNetwork().getPortal(PORTAL);
+        bungeeManager.updateNetwork(announcement(PORTAL, "other", StargateProtocolRequestType.PORTAL_ADD));
+        Assertions.assertSame(first, realPortal.getNetwork().getPortal(PORTAL));
+    }
+
+    @Test
+    void ownerChangeRefreshesRemotePortal() {
+        String message = announcement(PORTAL, "remote", StargateProtocolRequestType.PORTAL_ADD);
+        bungeeManager.updateNetwork(message);
+        com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(message).getAsJsonObject();
+        java.util.UUID owner = java.util.UUID.randomUUID();
+        json.addProperty("OWNER", owner.toString());
+        bungeeManager.updateNetwork(json.toString());
+        Assertions.assertEquals(owner, realPortal.getNetwork().getPortal(PORTAL).getOwnerUUID());
+    }
+
+    @Test
+    void offlineRequestNeverQueuesVirtualPortal() {
+        bungeeManager.updateNetwork(announcement(PORTAL, "remote", StargateProtocolRequestType.PORTAL_ADD));
+        bungeeManager.playerConnect(BungeeHelper.generateTeleportJsonMessage(PLAYER, realPortal.getNetwork().getPortal(PORTAL)));
+        Assertions.assertNull(bungeeManager.pullFromQueue(PLAYER));
+    }
+
+    @Test
+    void queueExpiresAndIsConsumedOnlyOnce() {
+        long[] now = {0};
+        StargateBungeeManager manager = new StargateBungeeManager(registry, new LanguageManagerMock(), networkManager, () -> now[0]);
+        manager.playerConnect(BungeeHelper.generateTeleportJsonMessage(PLAYER, realPortal));
+        now[0] = 60_001;
+        Assertions.assertNull(manager.pullFromQueue(PLAYER));
+        manager.playerConnect(BungeeHelper.generateTeleportJsonMessage(PLAYER, realPortal));
+        Assertions.assertSame(realPortal, manager.pullFromQueue(PLAYER));
+        Assertions.assertNull(manager.pullFromQueue(PLAYER));
+    }
+
+    private RealPortal countTeleports(RealPortal original, int[] calls) throws Exception {
+        RealPortal counting = (RealPortal) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class<?>[]{RealPortal.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("teleportHere")) { calls[0]++; return null; }
+                    return method.invoke(original, args);
+                });
+        original.getNetwork().removePortal(original);
+        original.getNetwork().addPortal(counting);
+        return counting;
+    }
+
+    @Test
+    void duplicateTeleportIdRunsOnceButNewIdCanTravelAgain() throws Exception {
+        int[] calls = {0};
+        RealPortal portal = countTeleports(realPortal, calls);
+        server.addPlayer(PLAYER);
+        String request = BungeeHelper.generateTeleportJsonMessage(PLAYER, portal);
+        bungeeManager.playerConnect(request);
+        bungeeManager.playerConnect(request);
+        org.sgrewritten.stargate.util.StargateTestHelper.runAllTasks();
+        Assertions.assertEquals(1, calls[0]);
+        bungeeManager.playerConnect(BungeeHelper.generateTeleportJsonMessage(PLAYER, portal));
+        org.sgrewritten.stargate.util.StargateTestHelper.runAllTasks();
+        Assertions.assertEquals(2, calls[0]);
+    }
+
+    @Test
+    void replayAfterQueueConsumptionDoesNotTeleportAgain() throws Exception {
+        int[] calls = {0};
+        RealPortal portal = countTeleports(realPortal, calls);
+        String request = BungeeHelper.generateTeleportJsonMessage(PLAYER, portal);
+        bungeeManager.playerConnect(request);
+        Assertions.assertSame(portal, bungeeManager.pullFromQueue(PLAYER));
+        server.addPlayer(PLAYER);
+        bungeeManager.playerConnect(request);
+        org.sgrewritten.stargate.util.StargateTestHelper.runAllTasks();
+        Assertions.assertEquals(0, calls[0]);
+    }
+
+    @Test
+    void legacyDuplicatesExpireWithoutSuppressingLaterTrips() throws Exception {
+        int[] calls = {0};
+        RealPortal portal = countTeleports(bungeePortal, calls);
+        long[] now = {0};
+        StargateBungeeManager manager = new StargateBungeeManager(registry, new LanguageManagerMock(), networkManager, () -> now[0]);
+        server.addPlayer(PLAYER);
+        String message = BungeeHelper.generateLegacyTeleportMessage(PLAYER, portal);
+        manager.legacyPlayerConnect(message);
+        manager.legacyPlayerConnect(message);
+        org.sgrewritten.stargate.util.StargateTestHelper.runAllTasks();
+        Assertions.assertEquals(1, calls[0]);
+        now[0] = 1001;
+        manager.legacyPlayerConnect(message);
+        org.sgrewritten.stargate.util.StargateTestHelper.runAllTasks();
+        Assertions.assertEquals(2, calls[0]);
+    }
+
+    @Test
+    void malformedLegacyMessageIsIgnored() {
+        Assertions.assertDoesNotThrow(() -> bungeeManager.legacyPlayerConnect("missing separator"));
+        Assertions.assertDoesNotThrow(() -> bungeeManager.legacyPlayerConnect("name#@#"));
+    }
+
+    @Test
+    void portalRenameReplayKeepsDestinationAndCannotOverwriteAnotherGate() {
+        bungeeManager.updateNetwork(announcement(PORTAL, "remote", StargateProtocolRequestType.PORTAL_ADD));
+        Network network = realPortal.getNetwork();
+        Portal original = network.getPortal(PORTAL);
+        String rename = BungeeHelper.generateRenamePortalMessage("renamed", "PoRtAl", network);
+        bungeeManager.updateNetwork(rename);
+        bungeeManager.updateNetwork(rename);
+        Assertions.assertSame(original, network.getPortal("renamed"));
+        Assertions.assertNull(network.getPortal(PORTAL));
+        bungeeManager.updateNetwork(BungeeHelper.generateRenamePortalMessage(REGISTERED_PORTAL, "renamed", network));
+        Assertions.assertSame(realPortal, network.getPortal(REGISTERED_PORTAL));
+        Assertions.assertSame(original, network.getPortal("renamed"));
+    }
+
+    @Test
+    void networkRenameReplayCannotOverwriteExistingNetwork() throws Exception {
+        Network existing = networkManager.createNetwork("occupied", NetworkType.CUSTOM, StorageType.INTER_SERVER, false);
+        Network original = realPortal.getNetwork();
+        bungeeManager.updateNetwork(BungeeHelper.generateRenameNetworkMessage("occupied", NETWORK2));
+        Assertions.assertSame(original, registry.getNetwork(NETWORK2, StorageType.INTER_SERVER));
+        Assertions.assertSame(existing, registry.getNetwork("occupied", StorageType.INTER_SERVER));
+        String rename = BungeeHelper.generateRenameNetworkMessage("renamed", NETWORK2);
+        bungeeManager.updateNetwork(rename);
+        bungeeManager.updateNetwork(rename);
+        Assertions.assertSame(original, registry.getNetwork("renamed", StorageType.INTER_SERVER));
+    }
 }

@@ -6,7 +6,6 @@ import org.bukkit.World;
 import org.bukkit.block.BlockFace;
 import org.bukkit.entity.Boat;
 import org.bukkit.entity.Entity;
-import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.minecart.PoweredMinecart;
 import org.bukkit.util.Vector;
@@ -28,9 +27,11 @@ import org.sgrewritten.stargate.thread.task.StargateEntityTask;
 import org.sgrewritten.stargate.util.MessageUtils;
 import org.sgrewritten.stargate.util.VectorUtils;
 import org.sgrewritten.stargate.util.portal.TeleportationHelper;
+import org.sgrewritten.stargate.util.portal.AsyncSpawnSearch;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 
@@ -51,8 +52,12 @@ public class Teleporter {
     private final BlockFace destinationFace;
     boolean hasPermission;
     private String teleportMessage;
-    private final Set<Entity> teleportedEntities = new HashSet<>();
-    private List<LivingEntity> nearbyLeashed;
+    private final Set<Entity> teleportedEntities = ConcurrentHashMap.newKeySet();
+    private final Map<Entity, CompletableFuture<Boolean>> results = new ConcurrentHashMap<>();
+    private final Map<Entity, Entity> leashHolders = new HashMap<>();
+    private final Map<Entity, List<Entity>> plannedChildren = new HashMap<>();
+    private final Set<Entity> startedTeleports = ConcurrentHashMap.newKeySet();
+    private List<Entity> nearbyLeashed;
     private final LanguageManager languageManager;
     private final StargateEconomyAPI economyManager;
     private List<Player> playersToRefund = new ArrayList<>();
@@ -102,7 +107,8 @@ public class Teleporter {
         final Entity baseEntity = target;
 
 
-        nearbyLeashed = getNearbyLeashedEntities(baseEntity);
+        nearbyLeashed = ConfigurationHelper.getBoolean(ConfigurationOption.HANDLE_LEASHES)
+                ? getNearbyLeashedEntities(baseEntity) : List.of();
 
         // Reject an in-flight vessel before permission callbacks or economy charges.
         TeleportedEntityRelationDFS dfs = new TeleportedEntityRelationDFS(
@@ -111,6 +117,13 @@ public class Teleporter {
             return;
         }
         Set<Entity> entitiesToTeleport = dfs.getEntitiesToTeleport();
+        nearbyLeashed.forEach(entity -> leashHolders.put(entity, LeashSupport.holder(entity)));
+        entitiesToTeleport.forEach(entity -> {
+            results.put(entity, new CompletableFuture<>());
+            List<Entity> children = new ArrayList<>(entity.getPassengers());
+            leashHolders.forEach((child, holder) -> { if (holder == entity) children.add(child); });
+            plannedChildren.put(entity, children);
+        });
         hasPermission = new TeleportedEntityRelationDFS(this::hasPermissionAndBalance, nearbyLeashed)
                 .depthFirstSearch(baseEntity);
         entitiesToTeleport.forEach(entity -> {
@@ -137,19 +150,47 @@ public class Teleporter {
         if (world != null && !world.getWorldBorder().isInside(exit)) {
             String worldBorderInterfereMessage = languageManager.getErrorMessage(TranslatableMessage.OUTSIDE_WORLD_BORDER);
             entitiesToTeleport.forEach(entity -> entity.sendMessage(worldBorderInterfereMessage));
-            entitiesToTeleport.forEach(entity -> boatsTeleporting.remove(entity.getUniqueId()));
+            cancelBeforeTeleport(entitiesToTeleport);
             return;
         }
         // Avoid collisions by teleporting the entity to a free location
         if (origin == null || !origin.getExit().getWorld().equals(world)) {
-            exit = TeleportationHelper.findViableSpawnLocation(baseEntity, destination);
-        }
-        new StargateEntityTask(baseEntity) {
-            @Override
-            public void run() {
+            findSafeSpawn(baseEntity, location -> {
+                if (location == null) {
+                    baseEntity.sendMessage(languageManager.getErrorMessage(TranslatableMessage.DESTINATION_BLOCKED));
+                    cancelBeforeTeleport(entitiesToTeleport);
+                    return;
+                }
+                exit = location;
                 betterTeleport(baseEntity, exit, rotation);
-            }
-        }.runNow();
+            });
+            return;
+        }
+        scheduleTeleport(baseEntity, () -> betterTeleport(baseEntity, exit, rotation));
+    }
+
+    private void findSafeSpawn(Entity entity, Consumer<Location> continuation) {
+        CompletableFuture<Location> search;
+        try {
+            search = NonLegacyClass.REGIONIZED_SERVER.isImplemented()
+                    ? AsyncSpawnSearch.find(entity, destination)
+                    : CompletableFuture.completedFuture(TeleportationHelper.findViableSpawnLocation(entity, destination));
+        } catch (RuntimeException e) {
+            search = CompletableFuture.failedFuture(e);
+        }
+        search.whenComplete((location, error) -> scheduleTeleport(entity, () -> {
+            if (error != null) Stargate.log(error);
+            continuation.accept(error == null && !destination.isDestroyed()
+                    && (origin == null || !origin.isDestroyed()) ? location : null);
+        }));
+    }
+
+    private void cancelBeforeTeleport(Set<Entity> entities) {
+        if (hasPermission) refundPlayers(playersToRefund);
+        entities.forEach(entity -> {
+            result(entity).complete(false);
+            boatsTeleporting.remove(entity.getUniqueId());
+        });
     }
 
     /**
@@ -200,13 +241,13 @@ public class Teleporter {
         return offset;
     }
 
-    private List<LivingEntity> getNearbyLeashedEntities(Entity origin) {
+    private List<Entity> getNearbyLeashedEntities(Entity origin) {
         List<Entity> surroundingEntities = origin.getNearbyEntities(LOOK_FOR_LEASHED_RADIUS, LOOK_FOR_LEASHED_RADIUS,
                 LOOK_FOR_LEASHED_RADIUS);
-        List<LivingEntity> surroundingLeashedEntities = new ArrayList<>();
+        List<Entity> surroundingLeashedEntities = new ArrayList<>();
         for (Entity entity : surroundingEntities) {
-            if (entity instanceof LivingEntity livingEntity && livingEntity.isLeashed()) {
-                surroundingLeashedEntities.add(livingEntity);
+            if (owns(entity) && LeashSupport.holder(entity) != null) {
+                surroundingLeashedEntities.add(entity);
             }
         }
         return surroundingLeashedEntities;
@@ -227,12 +268,13 @@ public class Teleporter {
         }
         teleportedEntities.add(target);
         exit = exit.clone();
-        List<Entity> passengers = target.getPassengers();
+        List<Entity> passengers = List.copyOf(target.getPassengers());
         if (target.eject()) {
             Stargate.log(Level.FINER, "Ejected all passengers");
             teleportPassengers(target, exit, passengers);
         }
 
+        teleportNearbyLeashedEntities(target, exit, rotation);
         if (origin == null) {
             exit.setDirection(destinationFace.getOppositeFace().getDirection());
             teleport(target, exit);
@@ -242,8 +284,6 @@ public class Teleporter {
         // Let the teleport API load the destination. Even getChunk() can synchronously
         // load a remote chunk, which is not allowed from the source region on Folia.
 
-        Stargate.log(Level.FINEST, "Trying to teleport surrounding leashed entities");
-        teleportNearbyLeashedEntities(target, exit, rotation);
         Stargate.log(Level.FINEST, "Teleporting entity " + target + " to exit location " + exit);
         teleport(target, exit, rotation);
     }
@@ -256,13 +296,8 @@ public class Teleporter {
      */
     private void teleportPassengers(Entity target, Location exit, List<Entity> passengers) {
         for (Entity passenger : passengers) {
-            new StargateEntityTask(target) {
-                @Override
-                public void run() {
-                    betterTeleport(passenger, exit, rotation);
-                    target.addPassenger(passenger);
-                }
-            }.runDelayed(1);
+            attachWhenSettled(target, passenger, target, () -> target.addPassenger(passenger));
+            scheduleTeleport(passenger, () -> betterTeleport(passenger, exit, rotation));
         }
     }
 
@@ -276,24 +311,72 @@ public class Teleporter {
         if (!ConfigurationHelper.getBoolean(ConfigurationOption.HANDLE_LEASHES)) {
             return;
         }
-        for (LivingEntity entity : nearbyLeashed) {
-            final Location modifiedExit;
-            if (exit.getWorld() != entity.getWorld()) {
-                modifiedExit = TeleportationHelper.findViableSpawnLocation(entity, destination);
-            } else {
-                modifiedExit = exit;
+        for (Entity entity : nearbyLeashed) {
+            if (leashHolders.get(entity) != holder) continue;
+            // Detach on the owning source region before the holder leaves it. Waiting
+            // for the companion's next tick lets Folia break the leash first, losing
+            // the relationship this teleport already accepted.
+            if (!owns(entity) || LeashSupport.holder(entity) != holder) {
+                cancelPendingBranch(entity, new HashSet<>());
+                continue;
             }
-            if (entity.isLeashed() && entity.getLeashHolder() == holder) {
-                new StargateEntityTask(entity) {
-                    @Override
-                    public void run() {
-                        entity.setLeashHolder(null);
+            attachWhenSettled(entity, holder, entity, () -> {
+                if (LeashSupport.holder(entity) == null) LeashSupport.setHolder(entity, holder);
+            });
+            LeashSupport.setHolder(entity, null);
+            scheduleTeleport(entity, () -> {
+                // Respect a new leash attached while the companion was waiting.
+                if (LeashSupport.holder(entity) != null) {
+                    cancelPendingBranch(entity, new HashSet<>());
+                    return;
+                }
+                if (exit.getWorld() == entity.getWorld()) {
+                    betterTeleport(entity, exit, rotation);
+                } else {
+                    findSafeSpawn(entity, modifiedExit -> {
+                        if (LeashSupport.holder(entity) != null) {
+                            cancelPendingBranch(entity, new HashSet<>());
+                            return;
+                        }
+                        if (modifiedExit == null) {
+                            cancelPendingBranch(entity, new HashSet<>());
+                            entity.sendMessage(languageManager.getErrorMessage(TranslatableMessage.DESTINATION_BLOCKED));
+                            return;
+                        }
                         betterTeleport(entity, modifiedExit, rotation);
-                        entity.setLeashHolder(holder);
-                    }
-                }.runNow();
-            }
+                    });
+                }
+            });
         }
+    }
+
+    private void scheduleTeleport(Entity entity, Runnable action) {
+        new StargateEntityTask(entity) {
+            private boolean started;
+            @Override public void run() {
+                started = true;
+                try {
+                    action.run();
+                } catch (RuntimeException e) {
+                    cancelPendingBranch(entity, new HashSet<>());
+                    throw e;
+                }
+            }
+            @Override public synchronized void cancel() {
+                super.cancel();
+                if (!started) cancelPendingBranch(entity, new HashSet<>());
+            }
+        }.runNow();
+    }
+
+    // Only plugin bookkeeping: safe even if a scheduled source entity retires.
+    private void cancelPendingBranch(Entity entity, Set<Entity> visited) {
+        if (!visited.add(entity)) return;
+        if (!startedTeleports.contains(entity)) {
+            result(entity).complete(false);
+            boatsTeleporting.remove(entity.getUniqueId());
+        }
+        plannedChildren.getOrDefault(entity, List.of()).forEach(child -> cancelPendingBranch(child, visited));
     }
 
     /**
@@ -400,14 +483,46 @@ public class Teleporter {
 
     private void teleport(Entity target, Location exitPoint, Consumer<Boolean> completion) {
         UUID entityId = target.getUniqueId();
+        startedTeleports.add(target);
         entityTeleportation.teleport(target, exitPoint, success -> {
-            completion.accept(success);
-            if (success && origin != null && !origin.hasFlag(StargateFlag.SILENT)) {
-                MessageUtils.sendMessageFromPortal(origin, target, teleportMessage, MessageType.DENY);
+            try {
+                completion.accept(success);
+                if (success && origin != null && !origin.hasFlag(StargateFlag.SILENT)) {
+                    MessageUtils.sendMessageFromPortal(origin, target, teleportMessage, MessageType.DENY);
+                }
+            } finally {
+                result(target).complete(success);
             }
-        }, () -> boatsTeleporting.remove(entityId));
+        }, () -> {
+            result(target).complete(false); // Also settles relations after retirement/rejection.
+            boatsTeleporting.remove(entityId);
+        });
     }
 
+
+
+    private CompletableFuture<Boolean> result(Entity entity) {
+        return results.computeIfAbsent(entity, ignored -> new CompletableFuture<>());
+    }
+
+    private void attachWhenSettled(Entity first, Entity second, Entity owner, Runnable attachment) {
+        result(first).thenCombine(result(second), (a, b) -> a.equals(b)).thenAccept(sameOutcome -> {
+            if (!sameOutcome) return;
+            new StargateEntityTask(owner) {
+                @Override public void run() {
+                    if (!owns(first) || !owns(second) || !first.isValid() || !second.isValid()) return;
+                    if (first.getWorld().equals(second.getWorld())
+                            && first.getLocation().distanceSquared(second.getLocation()) <= 256) {
+                        attachment.run();
+                    }
+                }
+            }.runNow();
+        });
+    }
+
+    private static boolean owns(Entity entity) {
+        return !NonLegacyClass.REGIONIZED_SERVER.isImplemented() || Bukkit.isOwnedByCurrentRegion(entity);
+    }
 
     /**
      * Checks whether the given entity has the required permissions for performing the teleportation

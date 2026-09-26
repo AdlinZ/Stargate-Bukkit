@@ -21,3 +21,4 @@
 #Parity
 
 #Admin
+tpDestBlocked=目標傳送門附近沒有安全的落腳位置。

@@ -193,7 +193,11 @@ public class PlayerEventListener implements Listener {
         Portal destination = bungeeManager.pullFromQueue(player.getName());
 
         if (destination != null) {
-            destination.teleportHere(player, null);
+            new org.sgrewritten.stargate.thread.task.StargateEntityTask(player) {
+                @Override public void run() {
+                    if (player.isOnline() && !destination.isDestroyed()) destination.teleportHere(player, null);
+                }
+            }.runNow();
         }
 
         if (!ConfigurationHelper.getBoolean(ConfigurationOption.USING_REMOTE_DATABASE)) {

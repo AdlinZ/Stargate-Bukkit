@@ -36,6 +36,16 @@ public class TeleportationHelper {
      * @return <p>A possible spawn location, or null if no viable location could be found</p>
      */
     public static Location findViableSpawnLocation(Entity entity, RealPortal destinationPortal) {
+        int width = (int) Math.ceil(entity.getWidth());
+        int height = (int) Math.ceil(entity.getHeight());
+        for (Location candidate : getSpawnCandidates(width, destinationPortal)) {
+            if (isViableSpawnLocation(width, height, candidate)) return candidate;
+        }
+        return null;
+    }
+
+    /** Pure geometry and border checks: does not access destination blocks or chunks. */
+    static List<Location> getSpawnCandidates(int width, RealPortal destinationPortal) {
         BlockVector forward = destinationPortal.getExitFacing().getOppositeFace().getDirection().toBlockVector();
         BlockVector left = forward.clone().rotateAroundY(Math.PI / 2).toBlockVector();
         BlockVector right = forward.clone().rotateAroundY(-Math.PI / 2).toBlockVector();
@@ -48,13 +58,12 @@ public class TeleportationHelper {
         destinationPortal.getGate().getLocations(GateStructureType.IRIS).forEach(
                 (blockLocation) -> irisLocations.add(blockLocation.getLocation()));
         //TODO: Add the blocks beneath the iris as well
-        int width = (int) Math.ceil(entity.getWidth());
-        int height = (int) Math.ceil(entity.getHeight());
         Vector centerOffset = width % 2 != 0 ? new Vector(0.5, 0, 0.5) : new Vector();
         Location portalCenter = destinationPortal.getGate().getExit();
         World world = destinationPortal.getExit().getWorld();
         WorldBorder worldBorder = world != null ? world.getWorldBorder() : null;
 
+        List<Location> candidates = new ArrayList<>();
         //skip first layer as that was the origin of issue https://github.com/stargate-rewritten/Stargate-Bukkit/issues/231
         List<Location> coneLocations = getDirectionalConeLayer(irisLocations, forward, left, right, up, down, 0, portalCenter);
         //Give up after reaching the max cone length
@@ -62,13 +71,12 @@ public class TeleportationHelper {
             coneLocations = getDirectionalConeLayer(coneLocations, forward, left, right, up, down, coneHeight, portalCenter);
             for (Location possibleSpawnLocation : coneLocations) {
                 Location modifiedPossibleSpawnLocation = possibleSpawnLocation.clone().add(centerOffset);
-                if (isViableSpawnLocation(width, height, modifiedPossibleSpawnLocation) &&
-                        (worldBorder == null || worldBorder.isInside(modifiedPossibleSpawnLocation))) {
-                    return modifiedPossibleSpawnLocation;
+                if (worldBorder == null || worldBorder.isInside(modifiedPossibleSpawnLocation)) {
+                    candidates.add(modifiedPossibleSpawnLocation);
                 }
             }
         }
-        return null;
+        return candidates;
     }
 
     /**

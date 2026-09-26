@@ -398,6 +398,13 @@ public class Stargate extends JavaPlugin implements StargateAPI, ConfigurationAP
 
     @Override
     public void reload() {
+        try {
+            // A reload must observe accepted saves before swapping storage or clearing registries.
+            StargateQueuedAsyncTask.waitForEmptyQueue();
+        } catch (IllegalStateException e) {
+            Stargate.log(e);
+            return;
+        }
         registry.getNetworkRegistry(StorageType.LOCAL).closeAllPortals();
         registry.getNetworkRegistry(StorageType.INTER_SERVER).closeAllPortals();
         try {

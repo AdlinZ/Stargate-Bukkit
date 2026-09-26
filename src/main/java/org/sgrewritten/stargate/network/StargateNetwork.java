@@ -255,7 +255,7 @@ public class StargateNetwork implements Network {
 
     @Override
     public void renamePortal(String newName, String oldName) throws InvalidNameException {
-        Portal portal = nameToPortalMap.remove(oldName);
+        Portal portal = nameToPortalMap.remove(NameHelper.getNormalizedName(oldName));
         if (portal == null) {
             throw new InvalidNameException("Name does not exist, can not rename: " + oldName);
         }

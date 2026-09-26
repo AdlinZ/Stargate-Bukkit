@@ -20,6 +20,8 @@ public enum TranslatableMessage {
      */
     TELEPORT("tpSuccess"),
 
+    DESTINATION_BLOCKED("tpDestBlocked"),
+
     /**
      * The message to display when a stargate has been destroyed
      */

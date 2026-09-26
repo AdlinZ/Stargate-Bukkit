@@ -44,8 +44,17 @@ public class BukkitPluginMessageInterface implements PluginMessageInterface {
             dataOutputStream.writeUTF(channel.getChannel());
             Stargate.log(Level.FINER, String.format("Sending bungee message:%n%s", message));
             dataOutputStream.writeUTF(message);
-            Bukkit.getServer().sendPluginMessage(plugin, PluginChannel.BUNGEE.getChannel(), byteArrayOutputStream.toByteArray());
+            sendThroughOnePlayer(plugin, byteArrayOutputStream.toByteArray());
         }
+    }
+
+    private void sendThroughOnePlayer(Plugin plugin, byte[] packet) throws IOException {
+        // Server.sendPluginMessage broadcasts through every player, duplicating proxy requests.
+        org.bukkit.entity.Player carrier = Bukkit.getOnlinePlayers().stream().findFirst().orElse(null);
+        if (carrier == null) {
+            throw new IOException("No online player available to carry the proxy message");
+        }
+        carrier.sendPluginMessage(plugin, PluginChannel.BUNGEE.getChannel(), packet);
     }
 
     @Override
@@ -57,7 +66,7 @@ public class BukkitPluginMessageInterface implements PluginMessageInterface {
             dataOutputStream.writeUTF(channel.getChannel());
             Stargate.log(Level.FINER, String.format("Sending bungee message:%n%s", message));
             dataOutputStream.writeUTF(message);
-            Bukkit.getServer().sendPluginMessage(plugin, PluginChannel.BUNGEE.getChannel(), byteArrayOutputStream.toByteArray());
+            sendThroughOnePlayer(plugin, byteArrayOutputStream.toByteArray());
         }
     }
 }

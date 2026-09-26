@@ -153,6 +153,7 @@ public final class BungeeHelper {
      */
     public static String generateTeleportJsonMessage(String player, Portal portal) {
         JsonObject jsonData = new JsonObject();
+        jsonData.addProperty(StargateProtocolProperty.REQUEST_ID.toString(), UUID.randomUUID().toString());
         jsonData.add(StargateProtocolProperty.PLAYER.toString(), new JsonPrimitive(player));
         jsonData.add(StargateProtocolProperty.PORTAL.toString(), new JsonPrimitive(portal.getName()));
         jsonData.add(StargateProtocolProperty.NETWORK.toString(), new JsonPrimitive(portal.getNetwork().getId()));

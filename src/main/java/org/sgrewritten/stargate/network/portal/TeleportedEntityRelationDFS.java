@@ -1,7 +1,6 @@
 package org.sgrewritten.stargate.network.portal;
 
 import org.bukkit.entity.Entity;
-import org.bukkit.entity.LivingEntity;
 
 import java.util.HashSet;
 import java.util.List;
@@ -14,7 +13,7 @@ import java.util.function.Function;
 public class TeleportedEntityRelationDFS {
 
     private final Function<Entity, Boolean> permissionFunction;
-    private final List<LivingEntity> nearbyLeashedEntities;
+    private final List<? extends Entity> nearbyLeashedEntities;
     private final Set<Entity> entitiesToTeleport;
 
     /**
@@ -24,7 +23,7 @@ public class TeleportedEntityRelationDFS {
      * @param nearbyLeashedEntities <p>The nearby leashed entities to consider part of the teleportation</p>
      */
     public TeleportedEntityRelationDFS(Function<Entity, Boolean> permissionFunction,
-                                       List<LivingEntity> nearbyLeashedEntities) {
+                                       List<? extends Entity> nearbyLeashedEntities) {
         this.permissionFunction = permissionFunction;
         this.nearbyLeashedEntities = nearbyLeashedEntities;
         this.entitiesToTeleport = new HashSet<>();
@@ -38,12 +37,12 @@ public class TeleportedEntityRelationDFS {
      */
     public boolean depthFirstSearch(Entity node) {
         //Note that full tree has to be explored to check if anything is an instance of PoweredMinecart
-        boolean isSuccess = permissionFunction.apply(node);
         // Should be here to avoid checking the same node twice
         if (entitiesToTeleport.contains(node)) {
             return true;
         }
         entitiesToTeleport.add(node);
+        boolean isSuccess = permissionFunction.apply(node);
 
         //Recurse through all passengers
         for (Entity passenger : node.getPassengers()) {
@@ -51,8 +50,8 @@ public class TeleportedEntityRelationDFS {
         }
 
         //Recurse through all entities held in a leash by the node
-        for (LivingEntity leashed : nearbyLeashedEntities) {
-            if (leashed.getLeashHolder() == node) {
+        for (Entity leashed : nearbyLeashedEntities) {
+            if (LeashSupport.holder(leashed) == node) {
                 isSuccess &= depthFirstSearch(leashed);
             }
         }

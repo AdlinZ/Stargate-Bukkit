@@ -121,7 +121,7 @@ public class VirtualPortal implements Portal {
 
     @Override
     public String getAllFlagsString() {
-        return "";
+        return org.sgrewritten.stargate.util.portal.PortalHelper.flagsToString(flags);
     }
 
     @Override

@@ -1,5 +1,14 @@
 # Changes
 
+#### Unreleased — restore upstream storage behavior
+
+- Withdraw the maintenance-only owner/network persistence, synchronous shared
+  creation, missing-control recovery and reserved legacy network remapping.
+- Restore upstream SQL resources, storage APIs and persistence semantics.
+- Retain Folia teleport, passenger/leash, proxy replay and task lifecycle fixes.
+- Keep normal queued saves and bounded shutdown/reload draining; no reverse
+  migration or automatic edits of existing records are performed.
+
 #### Unreleased — maintenance fork, second batch
 
 - Wait for Folia teleport completion and dispatch entity updates to the owning scheduler.
